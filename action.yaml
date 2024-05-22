@@ -1,5 +1,8 @@
 name: '.NET Continuous Integration'
 description: 'Build and test .NET projects'
+branding:
+  icon: 'settings'
+  color: 'green'
 inputs:
   dotnet-version:
     description: 'The .NET SDK version to use'
