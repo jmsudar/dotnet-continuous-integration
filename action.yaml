@@ -40,10 +40,7 @@ runs:
       if: ${{ inputs.working-directory != '' }}
       env: 
         working_directory: ${{ inputs.working-directory }}
-      run: |
-        cd $working_directory
-        pwd
-        ls
+      run: $working_directory
       shell: bash
 
     - name: Restore dependencies
