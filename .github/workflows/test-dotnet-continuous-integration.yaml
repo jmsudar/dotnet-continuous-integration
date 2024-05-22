@@ -29,3 +29,5 @@ jobs:
 
     - name: Build and Test using Custom Action
       uses: ./
+      with:
+        working-directory: "$(pwd)/src"
