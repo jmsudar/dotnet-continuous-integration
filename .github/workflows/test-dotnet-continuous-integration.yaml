@@ -27,5 +27,10 @@ jobs:
         echo "namespace HelloWorld { public class HelloWorld { public string SayHello() => \"Hello World\"; }}" > src/HelloWorld/HelloWorld.cs
         echo "using Microsoft.VisualStudio.TestTools.UnitTesting; namespace HelloWorld.Tests { [TestClass] public class HelloWorldTests { [TestMethod] public void TestHelloWorld() { var helloWorld = new HelloWorld.HelloWorld(); Assert.AreEqual(\"Hello World\", helloWorld.SayHello()); }}" > src/HelloWorld.Tests/HelloWorldTests.cs
 
+    - name: Quick Check
+      run: |
+        pwd
+        ls    
+
     - name: Build and Test using Custom Action
       uses: ./action.yaml
