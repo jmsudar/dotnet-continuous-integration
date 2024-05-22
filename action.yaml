@@ -21,6 +21,10 @@ inputs:
     description: 'Any additional arguments to include with your test command'
     required: false
     default: ''
+  additional-test-arguments:
+    description: 'Any additional arguments to include with your test command'
+    required: false
+    default: ''
 runs:
   using: 'composite'
   steps:
@@ -31,6 +35,13 @@ runs:
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: ${{ inputs.dotnet-version }}
+
+    - name: Change to Working Directory
+      if: ${{ inputs.working-directory != '' }}
+      env: 
+        working_directory: ${{ inputs.working-directory }}
+      run: cd $working_directory
+      shell: bash
 
     - name: Restore dependencies
       run: dotnet restore
