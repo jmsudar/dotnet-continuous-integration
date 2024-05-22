@@ -21,8 +21,8 @@ inputs:
     description: 'Any additional arguments to include with your test command'
     required: false
     default: ''
-  additional-test-arguments:
-    description: 'Any additional arguments to include with your test command'
+  working-directory:
+    description: 'The working directory where tests should be executed, if not root'
     required: false
     default: ''
 runs:
