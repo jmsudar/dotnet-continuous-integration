@@ -28,4 +28,4 @@ jobs:
         echo "using Microsoft.VisualStudio.TestTools.UnitTesting; namespace HelloWorld.Tests { [TestClass] public class HelloWorldTests { [TestMethod] public void TestHelloWorld() { var helloWorld = new HelloWorld.HelloWorld(); Assert.AreEqual(\"Hello World\", helloWorld.SayHello()); }}" > src/HelloWorld.Tests/HelloWorldTests.cs
 
     - name: Build and Test using Custom Action
-      uses: action.yaml
+      uses: ./
