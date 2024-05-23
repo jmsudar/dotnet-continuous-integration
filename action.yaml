@@ -36,5 +36,5 @@ runs:
       shell: bash
 
     - name: Run tests
-      run: dotnet test --no-build --verbosity ${{ inputs.test-verbosity }}
+      run: dotnet test --no-build --configuration ${{ inputs.build-configuration }} --verbosity ${{ inputs.test-verbosity }}
       shell: bash
