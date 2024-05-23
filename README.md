@@ -6,7 +6,6 @@ This GitHub Action is designed to provide a simple and effective way to build an
 
 - .NET Version Flexibility: Uses any specified version of the .NET SDK.
 - Configurable Build and Test Commands: Allows for custom build configurations and test verbosity levels.
-- Support for Additional Arguments: Accepts custom arguments for both build and test commands to cater to various needs and environments.
 
 ## Inputs
 
@@ -32,8 +31,10 @@ on:
 
 jobs:
   build-and-test:
-    secrets: inherit
-    uses: jmsudar/dotnet-continuous-integration@main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run .NET CI Action
+        uses: jmsudar/dotnet-continuous-integration@main
 ```
 
 ### Customized Usage
@@ -48,15 +49,17 @@ on:
 
 jobs:
   build-and-test:
-    secrets: inherit
-    uses: jmsudar/dotnet-continuous-integration@main
-    with:
-      dotnet-version: '7.0'
-      build-configuration: 'Debug'
-      test-verbosity: 'detailed'
-      additional-build-arguments: '--no-dependencies,--no-incremental'
-      additional-test-arguments: '--collect:"Code coverage"'    
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run .NET CI Action
+        uses: jmsudar/dotnet-continuous-integration@main
+        with:
+          dotnet-version: '7.0'
+          build-configuration: 'Debug'
+          test-verbosity: 'detailed'
 ```
+
+If there are additionall CI steps you wish to run such as SonarQube coverage, simply add them as additional steps.
 
 ## Extending the Action
 
