@@ -16,18 +16,6 @@ inputs:
     description: 'Set the verbosity of test results'
     required: false
     default: 'normal'
-  additional-build-arguments:
-    description: 'Any additional arguments to include with your build command'
-    required: false
-    default: ''
-  additional-test-arguments:
-    description: 'Any additional arguments to include with your test command'
-    required: false
-    default: ''
-  working-directory:
-    description: 'The working directory where tests should be executed, if not root'
-    required: false
-    default: ''
 runs:
   using: 'composite'
   steps:
@@ -39,35 +27,14 @@ runs:
       with:
         dotnet-version: ${{ inputs.dotnet-version }}
 
-    - name: Change to Working Directory
-      if: ${{ inputs.working-directory != '' }}
-      env: 
-        working_directory: ${{ inputs.working-directory }}
-      run: $working_directory
-      shell: bash
-
     - name: Restore dependencies
       run: dotnet restore
       shell: bash
 
     - name: Build
-      env:
-        additional-build-arguments: ${{ inputs.additional-build-arguments }}
-      run: |
-        if [[ -n "${additional-build-arguments}" ]]; then
-          additional_build_arguments=$(echo "${additional-build-arguments}" | sed 's/,/ /g')
-        fi
-
-        dotnet build --no-restore --configuration ${{ inputs.build-configuration }}
+      run: dotnet build --no-restore --configuration ${{ inputs.build-configuration }}
       shell: bash
 
     - name: Run tests
-      env:
-        additional-test-arguments: ${{ inputs.additional-test-arguments }}
-      run: |
-        if [[ -n "${additional-test-arguments}" ]]; then
-          additional_test_arguments=$(echo "${additional-test-arguments}" | sed 's/,/ /g')
-        fi
-        
-        dotnet test --no-build --verbosity ${{ inputs.test-verbosity }}
+      run: dotnet test --no-build --verbosity ${{ inputs.test-verbosity }}
       shell: bash
