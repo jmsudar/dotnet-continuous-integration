@@ -59,6 +59,8 @@ jobs:
           test-verbosity: 'detailed'
 ```
 
+If there are additionall CI steps you wish to run such as SonarQube coverage, simply add them as additional steps.
+
 ## Extending the Action
 
 This action is designed to be forked and modified as needed. You can add new functionalities, such as different testing frameworks or more detailed setup and teardown processes.
