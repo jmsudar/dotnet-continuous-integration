@@ -58,7 +58,7 @@ runs:
           additional_build_arguments=$(echo "${additional-build-arguments}" | sed 's/,/ /g')
         fi
 
-        dotnet build --no-restore --configuration ${{ inputs.build-configuration }} $additional_build_arguments
+        dotnet build --no-restore --configuration ${{ inputs.build-configuration }}
       shell: bash
 
     - name: Run tests
@@ -69,5 +69,5 @@ runs:
           additional_test_arguments=$(echo "${additional-test-arguments}" | sed 's/,/ /g')
         fi
         
-        dotnet test --no-build --verbosity ${{ inputs.test-verbosity }} $additional_test_arguments
+        dotnet test --no-build --verbosity ${{ inputs.test-verbosity }}
       shell: bash
