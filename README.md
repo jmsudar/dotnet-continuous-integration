@@ -14,6 +14,7 @@ This GitHub Action is designed to provide a simple and effective way to build an
 | `dotnet-version`           | The .NET SDK version to use.                         | No       | `6.0`    |
 | `build-configuration`      | Configuration to use for building the project.       | No       | `Release`|
 | `test-verbosity`           | Set the verbosity of test results.                   | No       | `normal` |
+| `solution-path`            | Path to the solution file.                           | No       | `'.'`    |
 | `additional-build-arguments`| Any additional arguments to include with your build command | No | `''` |
 | `additional-test-arguments`| Any additional arguments to include with your test command | No | `''` |
 
@@ -57,6 +58,8 @@ jobs:
           dotnet-version: '7.0'
           build-configuration: 'Debug'
           test-verbosity: 'detailed'
+          additional-build-arguments: '--warnaserror'
+          additional-test-arguments: '--filter "Category!=Integration"'
 ```
 
 If there are additionall CI steps you wish to run such as SonarQube coverage, simply add them as additional steps.

@@ -16,9 +16,30 @@ inputs:
     description: 'Set the verbosity of test results'
     required: false
     default: 'normal'
+  solution-path:
+    description: 'Path to the solution file'
+    required: false
+    default: '.'
+  additional-build-arguments:
+    description: 'Extra arguments to pass to dotnet build'
+    required: false
+    default: ''
+  additional-test-arguments:
+    description: 'Extra arguments to pass to dotnet test'
+    required: false
+    default: ''
 runs:
   using: 'composite'
   steps:
+    # fast-fail if NUGET_API_KEY is not set, as CD will fail without it so the branch should not merge
+    - name: Check NUGET_API_KEY is set
+      shell: bash
+      run: |
+        if [[ -z "${{ secrets.NUGET_API_KEY }}" ]]; then
+          echo "::error::Error: NUGET_API_KEY is not set. Please ensure it is configured as a secret in your repository."
+          exit 1
+        fi
+
     - name: Checkout Code
       uses: actions/checkout@v4
 
@@ -28,13 +49,76 @@ runs:
         dotnet-version: ${{ inputs.dotnet-version }}
 
     - name: Restore dependencies
-      run: dotnet restore
       shell: bash
+      env:
+        SOLUTION_PATH: ${{ inputs.solution-path }}
+      run: dotnet restore ${{ env.SOLUTION_PATH }}
 
     - name: Build
-      run: dotnet build --no-restore --configuration ${{ inputs.build-configuration }}
       shell: bash
+      env:
+        BUILD_CONFIGURATION: ${{ inputs.build-configuration }}
+        SOLUTION_PATH: ${{ inputs.solution-path }}
+        ADDITIONAL_BUILD_ARGUMENTS: ${{ inputs.additional-build-arguments }}
+      run: |
+        echo "::group::Build Output"
+        OUTPUT=$(dotnet build ${{ env.SOLUTION_PATH }} --no-restore --configuration ${{ env.BUILD_CONFIGURATION }} ${{ env.ADDITIONAL_BUILD_ARGUMENTS }} 2>&1)
+        echo "$OUTPUT"
+        echo "::endgroup::"
+
+        ERROR_COUNT=$(echo "$OUTPUT" | grep -cE 'error\s[A-Z]{4}[0-9]{4}:')
+        WARNING_COUNT=$(echo "$OUTPUT" | grep -cE 'warning\s[A-Z]{4}[0-9]{4}:')
+
+        if [[ "$ERROR_COUNT" -gt 0 ]]; then
+          echo "$OUTPUT" | grep -E 'error\s[A-Z]{4}[0-9]{4}:' | while read -r line; do
+            echo "::error::❌ $line"
+          done
+          echo "::error::❌ Build failed with $ERROR_COUNT error(s)"
+          exit 1
+        elif [[ "$WARNING_COUNT" -gt 0 ]]; then
+          echo "$OUTPUT" | grep -E 'warning\s[A-Z]{4}[0-9]{4}:' | while read -r line; do
+            echo "::warning::⚠️ $line"
+          done
+          echo "::warning::⚠️ Build succeeded with $WARNING_COUNT warning(s)"
+        else
+          echo "::notice::✅ Build succeeded with no warnings or errors"
+        fi
 
     - name: Run tests
-      run: dotnet test --no-build --configuration ${{ inputs.build-configuration }} --verbosity ${{ inputs.test-verbosity }}
       shell: bash
+      env:
+        BUILD_CONFIGURATION: ${{ inputs.build-configuration }}
+        SOLUTION_PATH: ${{ inputs.solution-path }}
+        TEST_VERBOSITY: ${{ inputs.test-verbosity }}
+        ADDITIONAL_TEST_ARGUMENTS: ${{ inputs.additional-test-arguments }}
+      run: |
+        echo "::group::Test Output"
+        OUTPUT=$(dotnet test ${{ env.SOLUTION_PATH }} --no-build --configuration ${{ env.BUILD_CONFIGURATION }} --verbosity ${{ env.TEST_VERBOSITY }} ${{ env.ADDITIONAL_TEST_ARGUMENTS }} --logger "trx;LogFileName=test-results.trx" 2>&1 || true)
+        echo "$OUTPUT"
+        echo "::endgroup::"
+
+        PASSED=$(echo "$OUTPUT" | grep -oP 'Passed: \K[0-9]+')
+        FAILED=$(echo "$OUTPUT" | grep -oP 'Failed: \K[0-9]+')
+        SKIPPED=$(echo "$OUTPUT" | grep -oP 'Skipped: \K[0-9]+')
+
+        # Highlight failed tests by name
+        echo "$OUTPUT" | grep -A1 'Failed ' | grep -E '^\s*[^ ]+\s*\[.*\]' | while read -r line; do
+          TEST_NAME=$(echo "$line" | awk '{print $1}')
+          echo "::error::❌ Failed Test: $TEST_NAME"
+        done
+
+        # Highlight skipped tests by name
+        echo "$OUTPUT" | grep -A1 'Skipped ' | grep -E '^\s*[^ ]+\s*\[.*\]' | while read -r line; do
+          TEST_NAME=$(echo "$line" | awk '{print $1}')
+          echo "::warning::⚠️ Skipped Test: $TEST_NAME"
+        done
+
+        if [[ "$FAILED" -gt 0 ]]; then
+          echo "::error::❌ $FAILED test(s) failed"
+          exit 1
+        elif [[ "$SKIPPED" -gt 0 ]]; then
+          echo "::warning::⚠️ $SKIPPED test(s) skipped"
+          echo "::notice::✅ $PASSED test(s) passed"
+        else
+          echo "::notice::✅ All $PASSED test(s) passed"
+        fi
