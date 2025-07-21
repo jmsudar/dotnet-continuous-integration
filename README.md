@@ -11,7 +11,8 @@ This GitHub Action is designed to provide a simple and effective way to build an
 
 | Input                      | Description                                          | Required | Default  |
 |----------------------------|------------------------------------------------------|----------|----------|
-| `dotnet-version`           | The .NET SDK version to use.                         | No       | `6.0`    |
+| `nuget-api-key` | The NuGet key set in your repo | Yes | '' |
+|`dotnet-version`           | The .NET SDK version to use.                         | No       | `6.0`    |
 | `build-configuration`      | Configuration to use for building the project.       | No       | `Release`|
 | `test-verbosity`           | Set the verbosity of test results.                   | No       | `normal` |
 | `solution-path`            | Path to the solution file.                           | No       | `'.'`    |
