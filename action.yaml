@@ -4,6 +4,10 @@ branding:
   icon: 'settings'
   color: 'green'
 inputs:
+  nuget-api-key:
+    description: 'NuGet API key for publishing packages'
+    required: true
+    default: ''
   dotnet-version:
     description: 'The .NET SDK version to use'
     required: false
@@ -33,9 +37,11 @@ runs:
   steps:
     # fast-fail if NUGET_API_KEY is not set, as CD will fail without it so the branch should not merge
     - name: Check NUGET_API_KEY is set
+      env:
+        NUGET_API_KEY: ${{ inputs.nuget-api-key }}
       shell: bash
       run: |
-        if [[ -z "${{ secrets.NUGET_API_KEY }}" ]]; then
+        if [[ -z "${NUGET_API_KEY}" ]]; then
           echo "::error::Error: NUGET_API_KEY is not set. Please ensure it is configured as a secret in your repository."
           exit 1
         fi
@@ -62,7 +68,7 @@ runs:
         ADDITIONAL_BUILD_ARGUMENTS: ${{ inputs.additional-build-arguments }}
       run: |
         echo "::group::Build Output"
-        OUTPUT=$(dotnet build ${{ env.SOLUTION_PATH }} --no-restore --configuration ${{ env.BUILD_CONFIGURATION }} ${{ env.ADDITIONAL_BUILD_ARGUMENTS }} 2>&1)
+        OUTPUT=$(dotnet build ${SOLUTION_PATH} --no-restore --configuration ${BUILD_CONFIGURATION} ${ADDITIONAL_BUILD_ARGUMENTS} 2>&1)
         echo "$OUTPUT"
         echo "::endgroup::"
 
@@ -93,7 +99,7 @@ runs:
         ADDITIONAL_TEST_ARGUMENTS: ${{ inputs.additional-test-arguments }}
       run: |
         echo "::group::Test Output"
-        OUTPUT=$(dotnet test ${{ env.SOLUTION_PATH }} --no-build --configuration ${{ env.BUILD_CONFIGURATION }} --verbosity ${{ env.TEST_VERBOSITY }} ${{ env.ADDITIONAL_TEST_ARGUMENTS }} --logger "trx;LogFileName=test-results.trx" 2>&1 || true)
+        OUTPUT=$(dotnet test ${SOLUTION_PATH} --no-build --configuration ${BUILD_CONFIGURATION} --verbosity ${TEST_VERBOSITY} ${ADDITIONAL_TEST_ARGUMENTS} --logger "trx;LogFileName=test-results.trx" 2>&1 || true)
         echo "$OUTPUT"
         echo "::endgroup::"
 
