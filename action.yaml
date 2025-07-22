@@ -68,27 +68,76 @@ runs:
         ADDITIONAL_BUILD_ARGUMENTS: ${{ inputs.additional-build-arguments }}
       run: |
         echo "::group::Build Output"
-        OUTPUT=$(dotnet build ${SOLUTION_PATH} --no-restore --configuration ${BUILD_CONFIGURATION} ${ADDITIONAL_BUILD_ARGUMENTS} 2>&1)
-        echo "$OUTPUT"
+        
+        # Create build log file
+        BUILD_LOG="build-output.log"
+        
+        # Run build and capture both stdout and stderr, preserve exit code
+        set +e
+        dotnet build ${SOLUTION_PATH} --no-restore --configuration ${BUILD_CONFIGURATION} ${ADDITIONAL_BUILD_ARGUMENTS} 2>&1 | tee "$BUILD_LOG"
+        BUILD_EXIT_CODE=$?
+        set -e
+        
         echo "::endgroup::"
-
-        ERROR_COUNT=$(echo "$OUTPUT" | grep -cE 'error\s[A-Z]{4}[0-9]{4}:')
-        WARNING_COUNT=$(echo "$OUTPUT" | grep -cE 'warning\s[A-Z]{4}[0-9]{4}:')
-
-        if [[ "$ERROR_COUNT" -gt 0 ]]; then
-          echo "$OUTPUT" | grep -E 'error\s[A-Z]{4}[0-9]{4}:' | while read -r line; do
-            echo "::error::❌ $line"
-          done
-          echo "::error::❌ Build failed with $ERROR_COUNT error(s)"
+        
+        # Initialize summary
+        echo "## 🔨 Build Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Parse build output for errors and warnings
+        ERROR_COUNT=$(grep -cE 'error\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" || echo "0")
+        WARNING_COUNT=$(grep -cE 'warning\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" || echo "0")
+        
+        if [[ "$BUILD_EXIT_CODE" -ne 0 ]] || [[ "$ERROR_COUNT" -gt 0 ]]; then
+          echo "❌ **Build Status:** FAILED" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Errors:** $ERROR_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "- **Warnings:** $WARNING_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "- **Exit Code:** $BUILD_EXIT_CODE" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Show errors in summary
+          if [[ "$ERROR_COUNT" -gt 0 ]]; then
+            echo "### ❌ Build Errors" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -E 'error\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" | head -10 >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Also output as GitHub annotations
+            grep -E 'error\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" | while read -r line; do
+              echo "::error::❌ $line"
+            done
+          fi
+          
+          echo "::error::❌ Build failed with $ERROR_COUNT error(s) and $WARNING_COUNT warning(s)"
           exit 1
-        elif [[ "$WARNING_COUNT" -gt 0 ]]; then
-          echo "$OUTPUT" | grep -E 'warning\s[A-Z]{4}[0-9]{4}:' | while read -r line; do
-            echo "::warning::⚠️ $line"
-          done
-          echo "::warning::⚠️ Build succeeded with $WARNING_COUNT warning(s)"
         else
-          echo "::notice::✅ Build succeeded with no warnings or errors"
+          echo "✅ **Build Status:** SUCCESS" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Errors:** $ERROR_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "- **Warnings:** $WARNING_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "$WARNING_COUNT" -gt 0 ]]; then
+            echo "### ⚠️ Build Warnings" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -E 'warning\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" | head -10 >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Also output as GitHub annotations
+            grep -E 'warning\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" | while read -r line; do
+              echo "::warning::⚠️ $line"
+            done
+            echo "::warning::⚠️ Build succeeded with $WARNING_COUNT warning(s)"
+          else
+            echo "::notice::✅ Build succeeded with no warnings or errors"
+          fi
         fi
+        
+        # Upload build log as artifact
+        echo "BUILD_LOG_PATH=$BUILD_LOG" >> $GITHUB_ENV
 
     - name: Run tests
       shell: bash
@@ -99,32 +148,112 @@ runs:
         ADDITIONAL_TEST_ARGUMENTS: ${{ inputs.additional-test-arguments }}
       run: |
         echo "::group::Test Output"
-        OUTPUT=$(dotnet test ${SOLUTION_PATH} --no-build --configuration ${BUILD_CONFIGURATION} --verbosity ${TEST_VERBOSITY} ${ADDITIONAL_TEST_ARGUMENTS} --logger "trx;LogFileName=test-results.trx" 2>&1 || true)
-        echo "$OUTPUT"
+        
+        # Create test log file
+        TEST_LOG="test-output.log"
+        
+        # Run tests and capture both stdout and stderr, preserve exit code
+        set +e
+        dotnet test ${SOLUTION_PATH} --no-build --configuration ${BUILD_CONFIGURATION} --verbosity ${TEST_VERBOSITY} ${ADDITIONAL_TEST_ARGUMENTS} --logger "trx;LogFileName=test-results.trx" --logger "console;verbosity=detailed" 2>&1 | tee "$TEST_LOG"
+        TEST_EXIT_CODE=$?
+        set -e
+        
         echo "::endgroup::"
-
-        PASSED=$(echo "$OUTPUT" | grep -oP 'Passed: \K[0-9]+')
-        FAILED=$(echo "$OUTPUT" | grep -oP 'Failed: \K[0-9]+')
-        SKIPPED=$(echo "$OUTPUT" | grep -oP 'Skipped: \K[0-9]+')
-
-        # Highlight failed tests by name
-        echo "$OUTPUT" | grep -A1 'Failed ' | grep -E '^\s*[^ ]+\s*\[.*\]' | while read -r line; do
-          TEST_NAME=$(echo "$line" | awk '{print $1}')
-          echo "::error::❌ Failed Test: $TEST_NAME"
-        done
-
-        # Highlight skipped tests by name
-        echo "$OUTPUT" | grep -A1 'Skipped ' | grep -E '^\s*[^ ]+\s*\[.*\]' | while read -r line; do
-          TEST_NAME=$(echo "$line" | awk '{print $1}')
-          echo "::warning::⚠️ Skipped Test: $TEST_NAME"
-        done
-
-        if [[ "$FAILED" -gt 0 ]]; then
-          echo "::error::❌ $FAILED test(s) failed"
-          exit 1
-        elif [[ "$SKIPPED" -gt 0 ]]; then
-          echo "::warning::⚠️ $SKIPPED test(s) skipped"
-          echo "::notice::✅ $PASSED test(s) passed"
-        else
-          echo "::notice::✅ All $PASSED test(s) passed"
+        
+        # Add test results to summary
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "## 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Parse test output for results
+        PASSED=$(grep -oP 'Passed:\s*\K[0-9]+' "$TEST_LOG" | tail -1 || echo "0")
+        FAILED=$(grep -oP 'Failed:\s*\K[0-9]+' "$TEST_LOG" | tail -1 || echo "0")
+        SKIPPED=$(grep -oP 'Skipped:\s*\K[0-9]+' "$TEST_LOG" | tail -1 || echo "0")
+        TOTAL=$((PASSED + FAILED + SKIPPED))
+        
+        # Handle case where no tests were found
+        if [[ "$TOTAL" -eq 0 ]]; then
+          # Try alternative parsing for different dotnet output formats
+          PASSED=$(grep -oP 'Passed!\s*-\s*Failed:\s*0,\s*Passed:\s*\K[0-9]+' "$TEST_LOG" || echo "0")
+          FAILED=$(grep -oP 'Failed!\s*-\s*Failed:\s*\K[0-9]+' "$TEST_LOG" || echo "0")
+          TOTAL=$((PASSED + FAILED + SKIPPED))
         fi
+        
+        if [[ "$TEST_EXIT_CODE" -ne 0 ]] || [[ "$FAILED" -gt 0 ]]; then
+          echo "❌ **Test Status:** FAILED" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total Tests:** $TOTAL" >> $GITHUB_STEP_SUMMARY
+          echo "- **Passed:** $PASSED" >> $GITHUB_STEP_SUMMARY
+          echo "- **Failed:** $FAILED" >> $GITHUB_STEP_SUMMARY
+          echo "- **Skipped:** $SKIPPED" >> $GITHUB_STEP_SUMMARY
+          echo "- **Exit Code:** $TEST_EXIT_CODE" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Show failed tests in summary
+          if [[ "$FAILED" -gt 0 ]]; then
+            echo "### ❌ Failed Tests" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            
+            # Extract failed test names from output
+            grep -E "(FAIL|Failed)" "$TEST_LOG" | grep -v "Failed:" | head -10 >> $GITHUB_STEP_SUMMARY || echo "Failed test details not available in this format" >> $GITHUB_STEP_SUMMARY
+            
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Also output as GitHub annotations
+            grep -E "(FAIL|Failed)" "$TEST_LOG" | grep -v "Failed:" | head -10 | while read -r line; do
+              echo "::error::❌ Failed Test: $line"
+            done
+          fi
+          
+          echo "::error::❌ $FAILED test(s) failed out of $TOTAL total tests"
+          exit 1
+        else
+          echo "✅ **Test Status:** SUCCESS" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total Tests:** $TOTAL" >> $GITHUB_STEP_SUMMARY
+          echo "- **Passed:** $PASSED" >> $GITHUB_STEP_SUMMARY
+          echo "- **Failed:** $FAILED" >> $GITHUB_STEP_SUMMARY
+          echo "- **Skipped:** $SKIPPED" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "$SKIPPED" -gt 0 ]]; then
+            echo "### ⚠️ Skipped Tests" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -E "(SKIP|Skipped)" "$TEST_LOG" | grep -v "Skipped:" | head -10 >> $GITHUB_STEP_SUMMARY || echo "Skipped test details not available in this format" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            echo "::warning::⚠️ $SKIPPED test(s) skipped"
+          fi
+          
+          if [[ "$TOTAL" -gt 0 ]]; then
+            echo "::notice::✅ All $PASSED test(s) passed out of $TOTAL total tests"
+          else
+            echo "::warning::⚠️ No tests found to execute"
+          fi
+        fi
+        
+        # Set environment variables for potential artifact upload
+        echo "TEST_LOG_PATH=$TEST_LOG" >> $GITHUB_ENV
+        echo "TEST_RESULTS_PATH=test-results.trx" >> $GITHUB_ENV
+
+    - name: Upload Build and Test Logs
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: build-and-test-logs
+        path: |
+          ${{ env.BUILD_LOG_PATH }}
+          ${{ env.TEST_LOG_PATH }}
+          ${{ env.TEST_RESULTS_PATH }}
+        retention-days: 30
+
+    - name: Publish Test Results
+      uses: dorny/test-reporter@v1
+      if: always()
+      with:
+        name: .NET Test Results
+        path: ${{ env.TEST_RESULTS_PATH }}
+        reporter: dotnet-trx
+        fail-on-error: false
