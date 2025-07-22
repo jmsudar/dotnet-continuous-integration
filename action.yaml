@@ -84,9 +84,23 @@ runs:
         echo "## 🔨 Build Results" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        # Parse build output for errors and warnings
-        ERROR_COUNT=$(grep -cE 'error\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" || echo "0")
-        WARNING_COUNT=$(grep -cE 'warning\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" || echo "0")
+        # Parse build output for errors and warnings with multiple patterns
+        # Try different patterns to catch various .NET warning/error formats
+        ERROR_COUNT=$(grep -ciE '(error\s[A-Z]+[0-9]+:|error:|^\s*error\s)' "$BUILD_LOG" || echo "0")
+        WARNING_COUNT=$(grep -ciE '(warning\s[A-Z]+[0-9]+:|warning:|^\s*warning\s)' "$BUILD_LOG" || echo "0")
+        
+        # Extract unique errors and warnings for display using broader patterns
+        UNIQUE_ERRORS=$(grep -iE '(error\s[A-Z]+[0-9]+:|error:|^\s*error\s)' "$BUILD_LOG" | sort -u || true)
+        UNIQUE_WARNINGS=$(grep -iE '(warning\s[A-Z]+[0-9]+:|warning:|^\s*warning\s)' "$BUILD_LOG" | sort -u || true)
+        
+        # Debug output to help troubleshoot warning detection
+        echo "::debug::Found $ERROR_COUNT errors and $WARNING_COUNT warnings in build log"
+        if [[ "$WARNING_COUNT" -gt 0 ]]; then
+          echo "::debug::Sample warnings found:"
+          echo "$UNIQUE_WARNINGS" | head -3 | while read -r line; do
+            echo "::debug::  $line"
+          done
+        fi
         
         if [[ "$BUILD_EXIT_CODE" -ne 0 ]] || [[ "$ERROR_COUNT" -gt 0 ]]; then
           echo "❌ **Build Status:** FAILED" >> $GITHUB_STEP_SUMMARY
@@ -100,17 +114,39 @@ runs:
           if [[ "$ERROR_COUNT" -gt 0 ]]; then
             echo "### ❌ Build Errors" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-            grep -E 'error\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" | head -10 >> $GITHUB_STEP_SUMMARY
+            echo "$UNIQUE_ERRORS" | head -10 >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             
-            # Also output as GitHub annotations
-            grep -E 'error\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" | while read -r line; do
-              echo "::error::❌ $line"
+            # Output as GitHub annotations (deduplicated)
+            echo "$UNIQUE_ERRORS" | head -10 | while read -r line; do
+              if [[ -n "$line" ]]; then
+                echo "::error::❌ $line"
+              fi
             done
           fi
           
-          echo "::error::❌ Build failed with $ERROR_COUNT error(s) and $WARNING_COUNT warning(s)"
+          # Show warnings in summary if any (deduplicated)
+          if [[ "$WARNING_COUNT" -gt 0 ]]; then
+            echo "### ⚠️ Build Warnings" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "$UNIQUE_WARNINGS" | head -10 >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Output as GitHub annotations (deduplicated)
+            echo "$UNIQUE_WARNINGS" | head -10 | while read -r line; do
+              if [[ -n "$line" ]]; then
+                echo "::warning::⚠️ $line"
+              fi
+            done
+          fi
+          
+          if [[ "$WARNING_COUNT" -gt 0 ]]; then
+            echo "::error::❌ Build failed with $ERROR_COUNT error(s) and $WARNING_COUNT warning(s)"
+          else
+            echo "::error::❌ Build failed with $ERROR_COUNT error(s)"
+          fi
           exit 1
         else
           echo "✅ **Build Status:** SUCCESS" >> $GITHUB_STEP_SUMMARY
@@ -122,13 +158,15 @@ runs:
           if [[ "$WARNING_COUNT" -gt 0 ]]; then
             echo "### ⚠️ Build Warnings" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-            grep -E 'warning\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" | head -10 >> $GITHUB_STEP_SUMMARY
+            echo "$UNIQUE_WARNINGS" | head -10 >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             
-            # Also output as GitHub annotations
-            grep -E 'warning\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" | while read -r line; do
-              echo "::warning::⚠️ $line"
+            # Output as GitHub annotations (deduplicated)
+            echo "$UNIQUE_WARNINGS" | head -10 | while read -r line; do
+              if [[ -n "$line" ]]; then
+                echo "::warning::⚠️ $line"
+              fi
             done
             echo "::warning::⚠️ Build succeeded with $WARNING_COUNT warning(s)"
           else
