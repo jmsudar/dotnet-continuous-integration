@@ -84,17 +84,20 @@ runs:
         echo "## 🔨 Build Results" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        # Parse build output for errors and warnings with multiple patterns
-        # Try different patterns to catch various .NET warning/error formats
-        ERROR_COUNT=$(grep -ciE '(error\s[A-Z]+[0-9]+:|error:|^\s*error\s)' "$BUILD_LOG" || echo "0")
-        WARNING_COUNT=$(grep -ciE '(warning\s[A-Z]+[0-9]+:|warning:|^\s*warning\s)' "$BUILD_LOG" || echo "0")
+        # Parse build output for errors and warnings with precise patterns
+        # Use more specific patterns to avoid false matches
+        ERROR_COUNT=$(grep -cE 'error\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" || echo "0")
+        WARNING_COUNT=$(grep -cE 'warning\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" || echo "0")
         
-        # Extract unique errors and warnings for display using broader patterns
-        UNIQUE_ERRORS=$(grep -iE '(error\s[A-Z]+[0-9]+:|error:|^\s*error\s)' "$BUILD_LOG" | sort -u || true)
-        UNIQUE_WARNINGS=$(grep -iE '(warning\s[A-Z]+[0-9]+:|warning:|^\s*warning\s)' "$BUILD_LOG" | sort -u || true)
+        # Extract unique errors and warnings for display
+        UNIQUE_ERRORS=$(grep -E 'error\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" | sort -u || true)
+        UNIQUE_WARNINGS=$(grep -E 'warning\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" | sort -u || true)
         
         # Debug output to help troubleshoot warning detection
         echo "::debug::Found $ERROR_COUNT errors and $WARNING_COUNT warnings in build log"
+        echo "::debug::Checking for any lines containing 'warning' (case insensitive):"
+        grep -i 'warning' "$BUILD_LOG" | head -5 || echo "::debug::No lines containing 'warning' found"
+        
         if [[ "$WARNING_COUNT" -gt 0 ]]; then
           echo "::debug::Sample warnings found:"
           echo "$UNIQUE_WARNINGS" | head -3 | while read -r line; do
@@ -174,8 +177,8 @@ runs:
           fi
         fi
         
-        # Upload build log as artifact
-        echo "BUILD_LOG_PATH=$BUILD_LOG" >> $GITHUB_ENV
+        # Set absolute path for build log artifact
+        echo "BUILD_LOG_PATH=$PWD/$BUILD_LOG" >> $GITHUB_ENV
 
     - name: Run tests
       shell: bash
@@ -272,9 +275,9 @@ runs:
           fi
         fi
         
-        # Set environment variables for potential artifact upload
-        echo "TEST_LOG_PATH=$TEST_LOG" >> $GITHUB_ENV
-        echo "TEST_RESULTS_PATH=test-results.trx" >> $GITHUB_ENV
+        # Set absolute paths for test artifacts
+        echo "TEST_LOG_PATH=$PWD/$TEST_LOG" >> $GITHUB_ENV
+        echo "TEST_RESULTS_PATH=$PWD/test-results.trx" >> $GITHUB_ENV
 
     - name: Upload Build and Test Logs
       uses: actions/upload-artifact@v4
