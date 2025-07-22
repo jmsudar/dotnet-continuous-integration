@@ -11,7 +11,7 @@ This GitHub Action is designed to provide a simple and effective way to build an
 
 | Input                      | Description                                          | Required | Default  |
 |----------------------------|------------------------------------------------------|----------|----------|
-| `nuget-api-key` | The NuGet key set in your repo | Yes | '' |
+| `nuget-api-key` | The NuGet key set in your repo | Yes | `''` |
 |`dotnet-version`           | The .NET SDK version to use.                         | No       | `6.0`    |
 | `build-configuration`      | Configuration to use for building the project.       | No       | `Release`|
 | `test-verbosity`           | Set the verbosity of test results.                   | No       | `normal` |
@@ -37,6 +37,8 @@ jobs:
     steps:
       - name: Run .NET CI Action
         uses: jmsudar/dotnet-continuous-integration@main
+        with:
+          nuget-api-key: ${{ secrets.NUGET_API_KEY }}
 ```
 
 ### Customized Usage
@@ -56,6 +58,7 @@ jobs:
       - name: Run .NET CI Action
         uses: jmsudar/dotnet-continuous-integration@main
         with:
+          nuget-api-key: ${{ secrets.NUGET_API_KEY }}
           dotnet-version: '7.0'
           build-configuration: 'Debug'
           test-verbosity: 'detailed'
