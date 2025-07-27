@@ -84,17 +84,26 @@ runs:
         echo "## 🔨 Build Results" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        # Parse build output for errors and warnings with precise patterns
-        # Use more specific patterns to avoid false matches
-        ERROR_COUNT=$(grep -cE 'error\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" || echo "0")
-        WARNING_COUNT=$(grep -cE 'warning\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" || echo "0")
-        
-        # Extract unique errors and warnings for display
+        # Parse build output for errors and warnings with improved patterns
+        # Extract unique errors and warnings first, then count them
         UNIQUE_ERRORS=$(grep -E 'error\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" | sort -u || true)
-        UNIQUE_WARNINGS=$(grep -E 'warning\s[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" | sort -u || true)
+        UNIQUE_WARNINGS=$(grep -E '(warning\s[A-Z]{2}[0-9]{4}:|warning\s[A-Z]+[0-9]+:|\bwarning\b.*:)' "$BUILD_LOG" | sort -u || true)
         
-        # Debug output to help troubleshoot warning detection
-        echo "::debug::Found $ERROR_COUNT errors and $WARNING_COUNT warnings in build log"
+        # Count unique errors and warnings
+        if [[ -n "$UNIQUE_ERRORS" ]]; then
+          ERROR_COUNT=$(echo "$UNIQUE_ERRORS" | wc -l)
+        else
+          ERROR_COUNT=0
+        fi
+        
+        if [[ -n "$UNIQUE_WARNINGS" ]]; then
+          WARNING_COUNT=$(echo "$UNIQUE_WARNINGS" | wc -l)
+        else
+          WARNING_COUNT=0
+        fi
+        
+        # Debug output to help troubleshoot detection
+        echo "::debug::Found $ERROR_COUNT unique errors and $WARNING_COUNT unique warnings in build log"
         echo "::debug::Checking for any lines containing 'warning' (case insensitive):"
         grep -i 'warning' "$BUILD_LOG" | head -5 || echo "::debug::No lines containing 'warning' found"
         
@@ -121,10 +130,21 @@ runs:
             echo '```' >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             
-            # Output as GitHub annotations (deduplicated)
+            # Output as GitHub annotations with file/line info when possible
             echo "$UNIQUE_ERRORS" | head -10 | while read -r line; do
               if [[ -n "$line" ]]; then
-                echo "::error::❌ $line"
+                # Try to extract file path and line number for better annotations
+                if [[ "$line" =~ ^([^(]+)\(([0-9]+),([0-9]+)\):.*error.*:(.*)$ ]]; then
+                  file_path="${BASH_REMATCH[1]}"
+                  line_num="${BASH_REMATCH[2]}"
+                  col_num="${BASH_REMATCH[3]}"
+                  error_msg="${BASH_REMATCH[4]}"
+                  # Convert absolute path to relative if possible
+                  rel_path=$(echo "$file_path" | sed 's|.*/src/|src/|')
+                  echo "::error file=${rel_path},line=${line_num},col=${col_num}::${error_msg}"
+                else
+                  echo "::error::$line"
+                fi
               fi
             done
           fi
@@ -137,18 +157,30 @@ runs:
             echo '```' >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             
-            # Output as GitHub annotations (deduplicated)
+            # Output as GitHub annotations with file/line info when possible
             echo "$UNIQUE_WARNINGS" | head -10 | while read -r line; do
               if [[ -n "$line" ]]; then
-                echo "::warning::⚠️ $line"
+                # Try to extract file path and line number for better annotations
+                if [[ "$line" =~ ^([^(]+)\(([0-9]+),([0-9]+)\):.*warning.*:(.*)$ ]]; then
+                  file_path="${BASH_REMATCH[1]}"
+                  line_num="${BASH_REMATCH[2]}"
+                  col_num="${BASH_REMATCH[3]}"
+                  warning_msg="${BASH_REMATCH[4]}"
+                  # Convert absolute path to relative if possible
+                  rel_path=$(echo "$file_path" | sed 's|.*/src/|src/|')
+                  echo "::warning file=${rel_path},line=${line_num},col=${col_num}::${warning_msg}"
+                else
+                  echo "::warning::$line"
+                fi
               fi
             done
           fi
           
+          # Single summary error message
           if [[ "$WARNING_COUNT" -gt 0 ]]; then
-            echo "::error::❌ Build failed with $ERROR_COUNT error(s) and $WARNING_COUNT warning(s)"
+            echo "::error::Build failed with $ERROR_COUNT error(s) and $WARNING_COUNT warning(s)"
           else
-            echo "::error::❌ Build failed with $ERROR_COUNT error(s)"
+            echo "::error::Build failed with $ERROR_COUNT error(s)"
           fi
           exit 1
         else
@@ -165,13 +197,24 @@ runs:
             echo '```' >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             
-            # Output as GitHub annotations (deduplicated)
+            # Output as GitHub annotations with file/line info when possible
             echo "$UNIQUE_WARNINGS" | head -10 | while read -r line; do
               if [[ -n "$line" ]]; then
-                echo "::warning::⚠️ $line"
+                # Try to extract file path and line number for better annotations
+                if [[ "$line" =~ ^([^(]+)\(([0-9]+),([0-9]+)\):.*warning.*:(.*)$ ]]; then
+                  file_path="${BASH_REMATCH[1]}"
+                  line_num="${BASH_REMATCH[2]}"
+                  col_num="${BASH_REMATCH[3]}"
+                  warning_msg="${BASH_REMATCH[4]}"
+                  # Convert absolute path to relative if possible
+                  rel_path=$(echo "$file_path" | sed 's|.*/src/|src/|')
+                  echo "::warning file=${rel_path},line=${line_num},col=${col_num}::${warning_msg}"
+                else
+                  echo "::warning::$line"
+                fi
               fi
             done
-            echo "::warning::⚠️ Build succeeded with $WARNING_COUNT warning(s)"
+            echo "::warning::Build succeeded with $WARNING_COUNT warning(s)"
           else
             echo "::notice::✅ Build succeeded with no warnings or errors"
           fi
@@ -285,16 +328,17 @@ runs:
       with:
         name: build-and-test-logs
         path: |
-          ${{ env.BUILD_LOG_PATH }}
-          ${{ env.TEST_LOG_PATH }}
-          ${{ env.TEST_RESULTS_PATH }}
+          build-output.log
+          test-output.log
+          test-results.trx
         retention-days: 30
+        if-no-files-found: ignore
 
     - name: Publish Test Results
       uses: dorny/test-reporter@v1
       if: always()
       with:
         name: .NET Test Results
-        path: ${{ env.TEST_RESULTS_PATH }}
+        path: test-results.trx
         reporter: dotnet-trx
         fail-on-error: false
