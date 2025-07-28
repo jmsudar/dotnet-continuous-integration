@@ -4,15 +4,14 @@ This GitHub Action is designed to provide a simple and effective way to build an
 
 ## Features
 
-- **🔨 Enhanced Error & Warning Reporting**: Structured parsing of build output with clear visual indicators
+- **🔨 Enhanced Error & Warning Reporting**: Reliable parsing of build output with clear visual indicators
 - **📊 Rich GitHub Actions Summary**: Detailed build and test results with collapsible sections and emoji status indicators
-- **💬 Automated PR Comments**: Posts build/test status directly to pull requests for immediate visibility
 - **🎯 GitHub Annotations**: Inline error and warning annotations with file/line information
-- **⚡ Structured Logging**: Uses MSBuild JSON output when available for reliable error detection
-- **🧪 Comprehensive Test Analysis**: Parses TRX files for detailed test failure information
-- **📁 Artifact Management**: Automatically uploads build logs, test results, and parsed error files
+- **🧪 Comprehensive Test Analysis**: Parses console output for detailed test failure information
 - **🔧 .NET Version Flexibility**: Uses any specified version of the .NET SDK
 - **⚙️ Configurable Build and Test Commands**: Allows for custom build configurations and test verbosity levels
+- **🚀 Zero External Dependencies**: Pure bash implementation with no external tool requirements
+- **📝 Self-Contained Reporting**: All reporting happens in-memory without file management overhead
 
 ### Visual Status Indicators
 
@@ -25,9 +24,9 @@ The action provides at-a-glance status information using emojis:
 ### Reporting Features
 
 - **GitHub Actions Summary**: Rich markdown summary with metrics tables and collapsible error/warning details
-- **PR Comments**: Automated comments on pull requests with top errors/warnings and quick status overview
 - **GitHub Annotations**: Inline file annotations for errors and warnings with precise line/column information
-- **Structured Data**: Exports build and test metrics for use in subsequent workflow steps
+- **Console Output**: Clear status messages with emoji indicators for quick visual assessment
+- **Environment Variables**: Exports build and test metrics for use in subsequent workflow steps
 
 ## Inputs
 
@@ -40,7 +39,6 @@ The action provides at-a-glance status information using emojis:
 | `solution-path`            | Path to the solution file.                           | No       | `'.'`    |
 | `additional-build-arguments`| Any additional arguments to include with your build command | No | `''` |
 | `additional-test-arguments`| Any additional arguments to include with your test command | No | `''` |
-| `create-pr-comment`        | Create a PR comment with build/test results          | No       | `true`   |
 
 ## Usage
 

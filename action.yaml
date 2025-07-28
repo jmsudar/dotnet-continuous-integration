@@ -32,10 +32,6 @@ inputs:
     description: 'Extra arguments to pass to dotnet test'
     required: false
     default: ''
-  create-pr-comment:
-    description: 'Create a PR comment with build/test results'
-    required: false
-    default: 'true'
 runs:
   using: 'composite'
   steps:
@@ -75,159 +71,115 @@ runs:
         BUILD_SUCCESS=true
         ERROR_COUNT=0
         WARNING_COUNT=0
-        BUILD_LOG="build-output.log"
-        BUILD_JSON="build-results.json"
-        
-        # Function to parse build results from structured output
-        parse_build_results() {
-          local log_file="$1"
-          local json_file="$2"
-          
-          # Try to parse JSON output first (more reliable)
-          if [[ -f "$json_file" ]] && command -v jq >/dev/null 2>&1; then
-            # Parse JSON structured output
-            ERROR_COUNT=$(jq -r '[.[] | select(.level == "error")] | length' "$json_file" 2>/dev/null || echo "0")
-            WARNING_COUNT=$(jq -r '[.[] | select(.level == "warning")] | length' "$json_file" 2>/dev/null || echo "0")
-            
-            # Extract unique errors
-            if [[ "$ERROR_COUNT" -gt 0 ]]; then
-              jq -r '.[] | select(.level == "error") | "\(.file // "")(\(.line // ""),\(.column // "")): error \(.code // ""): \(.message // "")"' "$json_file" 2>/dev/null | sort -u > errors.txt
-            fi
-            
-            # Extract unique warnings  
-            if [[ "$WARNING_COUNT" -gt 0 ]]; then
-              jq -r '.[] | select(.level == "warning") | "\(.file // "")(\(.line // ""),\(.column // "")): warning \(.code // ""): \(.message // "")"' "$json_file" 2>/dev/null | sort -u > warnings.txt
-            fi
-          else
-            # Fallback to improved text parsing
-            # Extract errors with improved pattern matching
-            grep -E '^\s*[^:]*\([0-9]+,[0-9]+\):\s*error\s+[A-Z]{2}[0-9]{4}:' "$log_file" | sort -u > errors.txt 2>/dev/null || touch errors.txt
-            ERROR_COUNT=$(wc -l < errors.txt)
-            
-            # Extract warnings with improved pattern matching
-            grep -E '^\s*[^:]*\([0-9]+,[0-9]+\):\s*warning\s+[A-Z]{2}[0-9]{4}:' "$log_file" | sort -u > warnings.txt 2>/dev/null || touch warnings.txt
-            WARNING_COUNT=$(wc -l < warnings.txt)
-          fi
-        }
-        
-        # Function to create GitHub annotations
-        create_annotations() {
-          local type="$1"
-          local file="$2"
-          local limit="${3:-10}"
-          
-          if [[ -f "$file" ]] && [[ -s "$file" ]]; then
-            head -n "$limit" "$file" | while IFS= read -r line; do
-              if [[ -n "$line" ]]; then
-                # Extract file path, line, column, and message
-                if [[ "$line" =~ ^([^(]+)\(([0-9]+),([0-9]+)\):[[:space:]]*${type}[[:space:]]+([^:]+):[[:space:]]*(.*)$ ]]; then
-                  local file_path="${BASH_REMATCH[1]}"
-                  local line_num="${BASH_REMATCH[2]}"
-                  local col_num="${BASH_REMATCH[3]}"
-                  local code="${BASH_REMATCH[4]}"
-                  local message="${BASH_REMATCH[5]}"
-                  
-                  # Convert to relative path
-                  local rel_path=$(echo "$file_path" | sed 's|.*/||')
-                  echo "::${type} file=${rel_path},line=${line_num},col=${col_num}::${code}: ${message}"
-                else
-                  echo "::${type}::${line}"
-                fi
-              fi
-            done
-          fi
-        }
-        
-        # Function to generate summary content
-        generate_summary() {
-          local build_status="$1"
-          local error_count="$2"
-          local warning_count="$3"
-          
-          echo "# 🔨 Build Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [[ "$build_status" == "success" ]]; then
-            if [[ "$warning_count" -gt 0 ]]; then
-              echo "🟡 **Build Status:** ⚠️ SUCCESS WITH WARNINGS" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "🟢 **Build Status:** ✅ SUCCESS" >> $GITHUB_STEP_SUMMARY
-            fi
-          else
-            echo "🔴 **Build Status:** ❌ FAILED" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| 🔴 Errors | $error_count |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🟡 Warnings | $warning_count |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Add error details if any
-          if [[ "$error_count" -gt 0 ]] && [[ -f "errors.txt" ]]; then
-            echo "<details>" >> $GITHUB_STEP_SUMMARY
-            echo "<summary>🔴 Build Errors ($error_count)</summary>" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            head -20 errors.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            echo "</details>" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          # Add warning details if any
-          if [[ "$warning_count" -gt 0 ]] && [[ -f "warnings.txt" ]]; then
-            echo "<details>" >> $GITHUB_STEP_SUMMARY
-            echo "<summary>🟡 Build Warnings ($warning_count)</summary>" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            head -20 warnings.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            echo "</details>" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-          fi
-        }
+        BUILD_LOG=$(mktemp)
         
         echo "::group::Build Output"
         
-        # Run build with structured logging
+        # Run build and capture output
         set +e
-        if command -v jq >/dev/null 2>&1; then
-          # Use JSON logger if jq is available
-          dotnet build ${SOLUTION_PATH} --no-restore --configuration ${BUILD_CONFIGURATION} ${ADDITIONAL_BUILD_ARGUMENTS} \
-            --logger "console;verbosity=minimal" \
-            --logger "json;logfile=${BUILD_JSON}" \
-            2>&1 | tee "$BUILD_LOG"
-        else
-          # Fallback to console only
-          dotnet build ${SOLUTION_PATH} --no-restore --configuration ${BUILD_CONFIGURATION} ${ADDITIONAL_BUILD_ARGUMENTS} \
-            --verbosity normal \
-            2>&1 | tee "$BUILD_LOG"
-        fi
+        dotnet build ${SOLUTION_PATH} --no-restore --configuration ${BUILD_CONFIGURATION} ${ADDITIONAL_BUILD_ARGUMENTS} \
+          --verbosity normal 2>&1 | tee "$BUILD_LOG"
         BUILD_EXIT_CODE=$?
         set -e
         
         echo "::endgroup::"
         
-        # Parse build results
-        parse_build_results "$BUILD_LOG" "$BUILD_JSON"
+        # Parse build results directly from log
+        # Count unique errors (improved pattern matching)
+        ERROR_COUNT=$(grep -E '^\s*[^:]*\([0-9]+,[0-9]+\):\s*error\s+[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" | sort -u | wc -l)
+        
+        # Count unique warnings (improved pattern matching)
+        WARNING_COUNT=$(grep -E '^\s*[^:]*\([0-9]+,[0-9]+\):\s*warning\s+[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" | sort -u | wc -l)
         
         # Determine build status
         if [[ "$BUILD_EXIT_CODE" -ne 0 ]] || [[ "$ERROR_COUNT" -gt 0 ]]; then
           BUILD_SUCCESS=false
         fi
         
-        # Generate summary
+        # Generate GitHub Actions Summary
+        echo "# 🔨 Build Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
         if [[ "$BUILD_SUCCESS" == "true" ]]; then
-          generate_summary "success" "$ERROR_COUNT" "$WARNING_COUNT"
+          if [[ "$WARNING_COUNT" -gt 0 ]]; then
+            echo "🟡 **Build Status:** ⚠️ SUCCESS WITH WARNINGS" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "🟢 **Build Status:** ✅ SUCCESS" >> $GITHUB_STEP_SUMMARY
+          fi
         else
-          generate_summary "failed" "$ERROR_COUNT" "$WARNING_COUNT"
+          echo "🔴 **Build Status:** ❌ FAILED" >> $GITHUB_STEP_SUMMARY
         fi
         
-        # Create GitHub annotations
-        create_annotations "error" "errors.txt" 10
-        create_annotations "warning" "warnings.txt" 10
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+        echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| 🔴 Errors | $ERROR_COUNT |" >> $GITHUB_STEP_SUMMARY
+        echo "| 🟡 Warnings | $WARNING_COUNT |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Add error details if any (limit to top 10)
+        if [[ "$ERROR_COUNT" -gt 0 ]]; then
+          echo "<details>" >> $GITHUB_STEP_SUMMARY
+          echo "<summary>🔴 Build Errors ($ERROR_COUNT)</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E '^\s*[^:]*\([0-9]+,[0-9]+\):\s*error\s+[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" | sort -u | head -10 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Create GitHub annotations for errors (limit to top 10)
+          grep -E '^\s*[^:]*\([0-9]+,[0-9]+\):\s*error\s+[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" | sort -u | head -10 | while IFS= read -r line; do
+            if [[ -n "$line" ]]; then
+              # Try to extract file path, line, column, and message
+              if [[ "$line" =~ ^[[:space:]]*([^(]+)\(([0-9]+),([0-9]+)\):[[:space:]]*error[[:space:]]+([^:]+):[[:space:]]*(.*)$ ]]; then
+                local file_path="${BASH_REMATCH[1]}"
+                local line_num="${BASH_REMATCH[2]}"
+                local col_num="${BASH_REMATCH[3]}"
+                local code="${BASH_REMATCH[4]}"
+                local message="${BASH_REMATCH[5]}"
+                
+                # Convert to relative path
+                local rel_path=$(echo "$file_path" | sed 's|.*/||')
+                echo "::error file=${rel_path},line=${line_num},col=${col_num}::${code}: ${message}"
+              else
+                echo "::error::${line}"
+              fi
+            fi
+          done
+        fi
+        
+        # Add warning details if any (limit to top 10)
+        if [[ "$WARNING_COUNT" -gt 0 ]]; then
+          echo "<details>" >> $GITHUB_STEP_SUMMARY
+          echo "<summary>🟡 Build Warnings ($WARNING_COUNT)</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E '^\s*[^:]*\([0-9]+,[0-9]+\):\s*warning\s+[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" | sort -u | head -10 >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Create GitHub annotations for warnings (limit to top 10)
+          grep -E '^\s*[^:]*\([0-9]+,[0-9]+\):\s*warning\s+[A-Z]{2}[0-9]{4}:' "$BUILD_LOG" | sort -u | head -10 | while IFS= read -r line; do
+            if [[ -n "$line" ]]; then
+              # Try to extract file path, line, column, and message
+              if [[ "$line" =~ ^[[:space:]]*([^(]+)\(([0-9]+),([0-9]+)\):[[:space:]]*warning[[:space:]]+([^:]+):[[:space:]]*(.*)$ ]]; then
+                local file_path="${BASH_REMATCH[1]}"
+                local line_num="${BASH_REMATCH[2]}"
+                local col_num="${BASH_REMATCH[3]}"
+                local code="${BASH_REMATCH[4]}"
+                local message="${BASH_REMATCH[5]}"
+                
+                # Convert to relative path
+                local rel_path=$(echo "$file_path" | sed 's|.*/||')
+                echo "::warning file=${rel_path},line=${line_num},col=${col_num}::${code}: ${message}"
+              else
+                echo "::warning::${line}"
+              fi
+            fi
+          done
+        fi
         
         # Output final status messages
         if [[ "$BUILD_SUCCESS" == "false" ]]; then
@@ -248,7 +200,9 @@ runs:
         echo "BUILD_SUCCESS=$BUILD_SUCCESS" >> $GITHUB_ENV
         echo "BUILD_ERROR_COUNT=$ERROR_COUNT" >> $GITHUB_ENV
         echo "BUILD_WARNING_COUNT=$WARNING_COUNT" >> $GITHUB_ENV
-        echo "BUILD_LOG_PATH=$PWD/$BUILD_LOG" >> $GITHUB_ENV
+        
+        # Clean up temp file
+        rm -f "$BUILD_LOG"
         
         # Exit with error if build failed
         if [[ "$BUILD_SUCCESS" == "false" ]]; then
@@ -265,103 +219,48 @@ runs:
       run: |
         # Initialize test variables
         TEST_SUCCESS=true
-        TEST_LOG="test-output.log"
-        TEST_RESULTS_FILE="test-results.trx"
+        TEST_LOG=$(mktemp)
         PASSED=0
         FAILED=0
         SKIPPED=0
         TOTAL=0
         
-        # Function to parse TRX file for detailed test results
-        parse_test_results() {
-          local trx_file="$1"
-          
-          if [[ -f "$trx_file" ]] && command -v xmllint >/dev/null 2>&1; then
-            # Parse TRX file for detailed results
-            TOTAL=$(xmllint --xpath "count(//UnitTestResult)" "$trx_file" 2>/dev/null || echo "0")
-            PASSED=$(xmllint --xpath "count(//UnitTestResult[@outcome='Passed'])" "$trx_file" 2>/dev/null || echo "0")
-            FAILED=$(xmllint --xpath "count(//UnitTestResult[@outcome='Failed'])" "$trx_file" 2>/dev/null || echo "0")
-            SKIPPED=$(xmllint --xpath "count(//UnitTestResult[@outcome='NotExecuted' or @outcome='Skipped'])" "$trx_file" 2>/dev/null || echo "0")
-            
-            # Extract failed test details
-            if [[ "$FAILED" -gt 0 ]]; then
-              xmllint --xpath "//UnitTestResult[@outcome='Failed']/@testName" "$trx_file" 2>/dev/null | \
-                sed 's/testName="//g' | sed 's/"//g' | sort > failed-tests.txt || touch failed-tests.txt
-            fi
-          else
-            # Fallback to log parsing
-            PASSED=$(grep -oP 'Passed:\s*\K[0-9]+' "$TEST_LOG" | tail -1 || echo "0")
-            FAILED=$(grep -oP 'Failed:\s*\K[0-9]+' "$TEST_LOG" | tail -1 || echo "0")
-            SKIPPED=$(grep -oP 'Skipped:\s*\K[0-9]+' "$TEST_LOG" | tail -1 || echo "0")
-            TOTAL=$((PASSED + FAILED + SKIPPED))
-            
-            # Extract failed test names from log
-            if [[ "$FAILED" -gt 0 ]]; then
-              grep -E "(FAIL|Failed)" "$TEST_LOG" | grep -v "Failed:" | head -20 > failed-tests.txt || touch failed-tests.txt
-            fi
-          fi
-        }
-        
-        # Function to generate test summary
-        generate_test_summary() {
-          local test_status="$1"
-          local total="$2"
-          local passed="$3"
-          local failed="$4"
-          local skipped="$5"
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "# 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [[ "$test_status" == "success" ]]; then
-            if [[ "$skipped" -gt 0 ]]; then
-              echo "🟡 **Test Status:** ⚠️ PASSED WITH SKIPPED TESTS" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "🟢 **Test Status:** ✅ ALL PASSED" >> $GITHUB_STEP_SUMMARY
-            fi
-          else
-            echo "🔴 **Test Status:** ❌ FAILED" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| 📊 Total Tests | $total |" >> $GITHUB_STEP_SUMMARY
-          echo "| ✅ Passed | $passed |" >> $GITHUB_STEP_SUMMARY
-          echo "| ❌ Failed | $failed |" >> $GITHUB_STEP_SUMMARY
-          echo "| ⏭️ Skipped | $skipped |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Add failed test details if any
-          if [[ "$failed" -gt 0 ]] && [[ -f "failed-tests.txt" ]]; then
-            echo "<details>" >> $GITHUB_STEP_SUMMARY
-            echo "<summary>❌ Failed Tests ($failed)</summary>" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            head -20 failed-tests.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            echo "</details>" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-          fi
-        }
-        
         echo "::group::Test Output"
         
-        # Run tests with structured output
+        # Run tests and capture output
         set +e
         dotnet test ${SOLUTION_PATH} --no-build --configuration ${BUILD_CONFIGURATION} \
           --verbosity ${TEST_VERBOSITY} ${ADDITIONAL_TEST_ARGUMENTS} \
-          --logger "trx;LogFileName=${TEST_RESULTS_FILE}" \
-          --logger "console;verbosity=detailed" \
-          2>&1 | tee "$TEST_LOG"
+          --logger "console;verbosity=detailed" 2>&1 | tee "$TEST_LOG"
         TEST_EXIT_CODE=$?
         set -e
         
         echo "::endgroup::"
         
-        # Parse test results
-        parse_test_results "$TEST_RESULTS_FILE"
+        # Parse test results from console output
+        # Try multiple patterns to catch different dotnet output formats
+        PASSED=$(grep -oP 'Passed:\s*\K[0-9]+' "$TEST_LOG" | tail -1 || echo "0")
+        FAILED=$(grep -oP 'Failed:\s*\K[0-9]+' "$TEST_LOG" | tail -1 || echo "0")
+        SKIPPED=$(grep -oP 'Skipped:\s*\K[0-9]+' "$TEST_LOG" | tail -1 || echo "0")
+        
+        # Alternative parsing for different output formats
+        if [[ "$PASSED" == "0" ]] && [[ "$FAILED" == "0" ]] && [[ "$SKIPPED" == "0" ]]; then
+          # Try alternative patterns
+          PASSED=$(grep -oP 'Passed!\s*-\s*Failed:\s*0,\s*Passed:\s*\K[0-9]+' "$TEST_LOG" || echo "0")
+          FAILED=$(grep -oP 'Failed!\s*-\s*Failed:\s*\K[0-9]+' "$TEST_LOG" || echo "0")
+          
+          # Try yet another pattern
+          if [[ "$PASSED" == "0" ]] && [[ "$FAILED" == "0" ]]; then
+            TOTAL_LINE=$(grep -E "Total tests:|Tests run:" "$TEST_LOG" | tail -1 || echo "")
+            if [[ -n "$TOTAL_LINE" ]]; then
+              PASSED=$(echo "$TOTAL_LINE" | grep -oP 'Passed:\s*\K[0-9]+' || echo "0")
+              FAILED=$(echo "$TOTAL_LINE" | grep -oP 'Failed:\s*\K[0-9]+' || echo "0")
+              SKIPPED=$(echo "$TOTAL_LINE" | grep -oP 'Skipped:\s*\K[0-9]+' || echo "0")
+            fi
+          fi
+        fi
+        
+        TOTAL=$((PASSED + FAILED + SKIPPED))
         
         # Determine test status
         if [[ "$TEST_EXIT_CODE" -ne 0 ]] || [[ "$FAILED" -gt 0 ]]; then
@@ -369,15 +268,47 @@ runs:
         fi
         
         # Generate test summary
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "# 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
         if [[ "$TEST_SUCCESS" == "true" ]]; then
-          generate_test_summary "success" "$TOTAL" "$PASSED" "$FAILED" "$SKIPPED"
+          if [[ "$SKIPPED" -gt 0 ]]; then
+            echo "🟡 **Test Status:** ⚠️ PASSED WITH SKIPPED TESTS" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "🟢 **Test Status:** ✅ ALL PASSED" >> $GITHUB_STEP_SUMMARY
+          fi
         else
-          generate_test_summary "failed" "$TOTAL" "$PASSED" "$FAILED" "$SKIPPED"
+          echo "🔴 **Test Status:** ❌ FAILED" >> $GITHUB_STEP_SUMMARY
         fi
         
-        # Create GitHub annotations for failed tests
-        if [[ "$FAILED" -gt 0 ]] && [[ -f "failed-tests.txt" ]]; then
-          head -10 failed-tests.txt | while IFS= read -r line; do
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+        echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| 📊 Total Tests | $TOTAL |" >> $GITHUB_STEP_SUMMARY
+        echo "| ✅ Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
+        echo "| ❌ Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
+        echo "| ⏭️ Skipped | $SKIPPED |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Add failed test details if any
+        if [[ "$FAILED" -gt 0 ]]; then
+          echo "<details>" >> $GITHUB_STEP_SUMMARY
+          echo "<summary>❌ Failed Tests ($FAILED)</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          
+          # Extract failed test names from output (multiple patterns)
+          grep -E "(FAIL|Failed)" "$TEST_LOG" | grep -v "Failed:" | head -10 >> $GITHUB_STEP_SUMMARY || \
+          grep -E "^\s*X\s+" "$TEST_LOG" | head -10 >> $GITHUB_STEP_SUMMARY || \
+          echo "Failed test details not available in this format" >> $GITHUB_STEP_SUMMARY
+          
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Create GitHub annotations for failed tests
+          grep -E "(FAIL|Failed)" "$TEST_LOG" | grep -v "Failed:" | head -10 | while IFS= read -r line; do
             if [[ -n "$line" ]]; then
               echo "::error::❌ Failed Test: $line"
             fi
@@ -390,8 +321,10 @@ runs:
         else
           if [[ "$SKIPPED" -gt 0 ]]; then
             echo "::warning::⚠️ All tests passed but $SKIPPED test(s) were skipped"
-          else
+          elif [[ "$TOTAL" -gt 0 ]]; then
             echo "::notice::✅ All $PASSED test(s) passed"
+          else
+            echo "::warning::⚠️ No tests found to execute"
           fi
         fi
         
@@ -401,170 +334,35 @@ runs:
         echo "TEST_PASSED=$PASSED" >> $GITHUB_ENV
         echo "TEST_FAILED=$FAILED" >> $GITHUB_ENV
         echo "TEST_SKIPPED=$SKIPPED" >> $GITHUB_ENV
-        echo "TEST_LOG_PATH=$PWD/$TEST_LOG" >> $GITHUB_ENV
-        echo "TEST_RESULTS_PATH=$PWD/$TEST_RESULTS_FILE" >> $GITHUB_ENV
+        
+        # Clean up temp file
+        rm -f "$TEST_LOG"
         
         # Exit with error if tests failed
         if [[ "$TEST_SUCCESS" == "false" ]]; then
           exit 1
         fi
 
-    - name: Create PR Comment
-      if: always() && github.event_name == 'pull_request' && inputs.create-pr-comment == 'true'
-      uses: actions/github-script@v7
-      env:
-        BUILD_SUCCESS: ${{ env.BUILD_SUCCESS }}
-        BUILD_ERROR_COUNT: ${{ env.BUILD_ERROR_COUNT }}
-        BUILD_WARNING_COUNT: ${{ env.BUILD_WARNING_COUNT }}
-        TEST_SUCCESS: ${{ env.TEST_SUCCESS }}
-        TEST_TOTAL: ${{ env.TEST_TOTAL }}
-        TEST_PASSED: ${{ env.TEST_PASSED }}
-        TEST_FAILED: ${{ env.TEST_FAILED }}
-        TEST_SKIPPED: ${{ env.TEST_SKIPPED }}
-      with:
-        script: |
-          const fs = require('fs');
-          
-          // Read error and warning files if they exist
-          let errorDetails = '';
-          let warningDetails = '';
-          let failedTestDetails = '';
-          
-          try {
-            if (fs.existsSync('errors.txt')) {
-              const errors = fs.readFileSync('errors.txt', 'utf8').trim();
-              if (errors) {
-                const errorLines = errors.split('\n').slice(0, 5);
-                errorDetails = '\n\n**Top Errors:**\n```\n' + errorLines.join('\n') + '\n```';
-              }
-            }
-          } catch (e) {}
-          
-          try {
-            if (fs.existsSync('warnings.txt')) {
-              const warnings = fs.readFileSync('warnings.txt', 'utf8').trim();
-              if (warnings) {
-                const warningLines = warnings.split('\n').slice(0, 5);
-                warningDetails = '\n\n**Top Warnings:**\n```\n' + warningLines.join('\n') + '\n```';
-              }
-            }
-          } catch (e) {}
-          
-          try {
-            if (fs.existsSync('failed-tests.txt')) {
-              const failedTests = fs.readFileSync('failed-tests.txt', 'utf8').trim();
-              if (failedTests) {
-                const testLines = failedTests.split('\n').slice(0, 5);
-                failedTestDetails = '\n\n**Failed Tests:**\n```\n' + testLines.join('\n') + '\n```';
-              }
-            }
-          } catch (e) {}
-          
-          // Determine overall status
-          const buildSuccess = process.env.BUILD_SUCCESS === 'true';
-          const testSuccess = process.env.TEST_SUCCESS === 'true';
-          const overallSuccess = buildSuccess && testSuccess;
-          
-          // Build status emoji and text
-          let buildStatus = '';
-          const errorCount = parseInt(process.env.BUILD_ERROR_COUNT || '0');
-          const warningCount = parseInt(process.env.BUILD_WARNING_COUNT || '0');
-          
-          if (!buildSuccess) {
-            buildStatus = '🔴 ❌ **FAILED**';
-          } else if (warningCount > 0) {
-            buildStatus = '🟡 ⚠️ **SUCCESS WITH WARNINGS**';
-          } else {
-            buildStatus = '🟢 ✅ **SUCCESS**';
-          }
-          
-          // Test status emoji and text
-          let testStatus = '';
-          const testTotal = parseInt(process.env.TEST_TOTAL || '0');
-          const testPassed = parseInt(process.env.TEST_PASSED || '0');
-          const testFailed = parseInt(process.env.TEST_FAILED || '0');
-          const testSkipped = parseInt(process.env.TEST_SKIPPED || '0');
-          
-          if (!testSuccess) {
-            testStatus = '🔴 ❌ **FAILED**';
-          } else if (testSkipped > 0) {
-            testStatus = '🟡 ⚠️ **PASSED WITH SKIPPED**';
-          } else {
-            testStatus = '🟢 ✅ **ALL PASSED**';
-          }
-          
-          // Create comment body
-          const commentBody = `## 🔨 .NET CI Results
-          
-          ### Build Results
-          **Status:** ${buildStatus}
-          - 🔴 Errors: ${errorCount}
-          - 🟡 Warnings: ${warningCount}${errorDetails}${warningDetails}
-          
-          ### Test Results  
-          **Status:** ${testStatus}
-          - 📊 Total: ${testTotal}
-          - ✅ Passed: ${testPassed}
-          - ❌ Failed: ${testFailed}
-          - ⏭️ Skipped: ${testSkipped}${failedTestDetails}
-          
-          ---
-          
-          ${overallSuccess ? '🎉 **Overall Status: SUCCESS**' : '💥 **Overall Status: FAILED**'}
-          
-          [View detailed results in Actions](${context.payload.pull_request.html_url.replace('/pull/', '/actions/runs/')})`;
-          
-          // Find existing comment to update or create new one
-          const { data: comments } = await github.rest.issues.listComments({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: context.issue.number,
-          });
-          
-          const botComment = comments.find(comment => 
-            comment.user.type === 'Bot' && 
-            comment.body.includes('🔨 .NET CI Results')
-          );
-          
-          if (botComment) {
-            // Update existing comment
-            await github.rest.issues.updateComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: botComment.id,
-              body: commentBody
-            });
-          } else {
-            // Create new comment
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: commentBody
-            });
-          }
-
-    - name: Upload Build and Test Logs
-      uses: actions/upload-artifact@v4
+    - name: Final Summary
       if: always()
-      with:
-        name: build-and-test-logs
-        path: |
-          build-output.log
-          test-output.log
-          test-results.trx
-          build-results.json
-          errors.txt
-          warnings.txt
-          failed-tests.txt
-        retention-days: 30
-        if-no-files-found: ignore
-
-    - name: Publish Test Results
-      uses: dorny/test-reporter@v1
-      if: always()
-      with:
-        name: .NET Test Results
-        path: test-results.trx
-        reporter: dotnet-trx
-        fail-on-error: false
+      shell: bash
+      run: |
+        # Generate final summary section
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "---" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Determine overall status
+        BUILD_SUCCESS="${BUILD_SUCCESS:-false}"
+        TEST_SUCCESS="${TEST_SUCCESS:-false}"
+        
+        if [[ "$BUILD_SUCCESS" == "true" ]] && [[ "$TEST_SUCCESS" == "true" ]]; then
+          echo "🎉 **Overall Status: SUCCESS** ✅" >> $GITHUB_STEP_SUMMARY
+          echo "::notice::🎉 CI pipeline completed successfully!"
+        else
+          echo "💥 **Overall Status: FAILED** ❌" >> $GITHUB_STEP_SUMMARY
+          echo "::error::💥 CI pipeline failed - check the details above"
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "_Generated by .NET Continuous Integration Action_" >> $GITHUB_STEP_SUMMARY
