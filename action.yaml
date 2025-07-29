@@ -82,6 +82,7 @@ runs:
         echo "::endgroup::"
         
         # Process warnings using associative array for deduplication
+        # Use specific pattern to match MSBuild warning format: file(line,col): warning CODE: message
         declare -A warnings_map
         while IFS=':' read -r key rest; do
           if [[ -n "$key" && -n "$rest" ]]; then
@@ -90,11 +91,13 @@ runs:
             rest=$(echo "$rest" | xargs)
             warnings_map["$key"]="$rest"
           fi
-        done < <(grep -i "warning" "$BUILD_OUTPUT" || true)
+        done < <(grep -E "^\s*[^:]*\([0-9]+,[0-9]+\):\s*warning\s+[A-Z]{2}[0-9]{4}:" "$BUILD_OUTPUT" || true)
         
         WARNING_COUNT=${#warnings_map[@]}
         
         # Process errors using associative array for deduplication
+        # Use specific pattern to match MSBuild error format: file(line,col): error CODE: message
+        # Exclude compiler command lines and GitHub Actions annotations
         declare -A errors_map
         while IFS=':' read -r key rest; do
           if [[ -n "$key" && -n "$rest" ]]; then
@@ -103,7 +106,10 @@ runs:
             rest=$(echo "$rest" | xargs)
             errors_map["$key"]="$rest"
           fi
-        done < <(grep -i "error" "$BUILD_OUTPUT" | grep -v "::error::" || true)
+        done < <(grep -E "^\s*[^:]*\([0-9]+,[0-9]+\):\s*error\s+[A-Z]{2}[0-9]{4}:" "$BUILD_OUTPUT" | \
+                 grep -v "/usr/share/dotnet/dotnet exec" | \
+                 grep -v "/errorreport:" | \
+                 grep -v "::error::" || true)
         
         ERROR_COUNT=${#errors_map[@]}
         
