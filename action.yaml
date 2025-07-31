@@ -83,6 +83,7 @@ runs:
         
         # Process warnings using associative array for deduplication
         # Use specific pattern to match MSBuild warning format: file(line,col): warning CODE: message
+        # Exclude compiler command lines and GitHub Actions annotations
         declare -A warnings_map
         while IFS=':' read -r full_line rest; do
           if [[ -n "$full_line" && -n "$rest" ]]; then
@@ -97,7 +98,10 @@ runs:
             rest=$(echo "$rest" | xargs)
             warnings_map["$key"]="$rest"
           fi
-        done < <(grep -E "^\s*[^:]*\([0-9]+,[0-9]+\):\s*warning\s+[A-Z]{2}[0-9]{4}:" "$BUILD_OUTPUT" || true)
+        done < <(grep -E "^\s*[^:]*\([0-9]+,[0-9]+\):\s*warning\s+[A-Z]{2}[0-9]{4}:" "$BUILD_OUTPUT" | \
+                 grep -v "/usr/share/dotnet/dotnet exec" | \
+                 grep -v "/errorreport:" | \
+                 grep -v "::warning::" || true)
         
         WARNING_COUNT=${#warnings_map[@]}
         
