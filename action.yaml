@@ -81,30 +81,6 @@ runs:
         
         echo "::endgroup::"
         
-        # Process warnings using associative array for deduplication
-        # Use specific pattern to match MSBuild warning format: file(line,col): warning CODE: message
-        # Exclude compiler command lines and GitHub Actions annotations
-        declare -A warnings_map
-        while IFS=':' read -r full_line rest; do
-          if [[ -n "$full_line" && -n "$rest" ]]; then
-            # Extract the meaningful part as key: everything after /home/runner/work/ up to the first :
-            # This handles cases like "3>/home/runner/work/..." by extracting just the file path and location
-            if [[ "$full_line" =~ /home/runner/work/([^:]+) ]]; then
-              key="${BASH_REMATCH[1]}"
-            else
-              # Fallback: clean up the full line and use as key
-              key=$(echo "$full_line" | sed 's/^[0-9]*>//' | xargs)
-            fi
-            rest=$(echo "$rest" | xargs)
-            warnings_map["$key"]="$rest"
-          fi
-        done < <(grep -E "^\s*[^:]*\([0-9]+,[0-9]+\):\s*warning\s+[A-Z]{2}[0-9]{4}:" "$BUILD_OUTPUT" | \
-                 grep -v "/usr/share/dotnet/dotnet exec" | \
-                 grep -v "/errorreport:" | \
-                 grep -v "::warning::" || true)
-        
-        WARNING_COUNT=${#warnings_map[@]}
-        
         # Process errors using associative array for deduplication
         # Use specific pattern to match MSBuild error format: file(line,col): error CODE: message
         # Exclude compiler command lines and GitHub Actions annotations
@@ -128,6 +104,30 @@ runs:
                  grep -v "::error::" || true)
         
         ERROR_COUNT=${#errors_map[@]}
+        
+        # Process warnings using associative array for deduplication
+        # Use specific pattern to match MSBuild warning format: file(line,col): warning CODE: message
+        # Exclude compiler command lines and GitHub Actions annotations
+        declare -A warnings_map
+        while IFS=':' read -r full_line rest; do
+          if [[ -n "$full_line" && -n "$rest" ]]; then
+            # Extract the meaningful part as key: everything after /home/runner/work/ up to the first :
+            # This handles cases like "3>/home/runner/work/..." by extracting just the file path and location
+            if [[ "$full_line" =~ /home/runner/work/([^:]+) ]]; then
+              key="${BASH_REMATCH[1]}"
+            else
+              # Fallback: clean up the full line and use as key
+              key=$(echo "$full_line" | sed 's/^[0-9]*>//' | xargs)
+            fi
+            rest=$(echo "$rest" | xargs)
+            warnings_map["$key"]="$rest"
+          fi
+        done < <(grep -E "^\s*[^:]*\([0-9]+,[0-9]+\):\s*warning\s+[A-Z]{2}[0-9]{4}:" "$BUILD_OUTPUT" | \
+                 grep -v "/usr/share/dotnet/dotnet exec" | \
+                 grep -v "/errorreport:" | \
+                 grep -v "::warning::" || true)
+        
+        WARNING_COUNT=${#warnings_map[@]}
         
         # Determine build success
         BUILD_SUCCESS=true
