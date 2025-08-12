@@ -105,10 +105,34 @@ runs:
         
         ERROR_COUNT=${#errors_map[@]}
         
+        # Debug: Show sample of build output for troubleshooting
+        echo "::group::Debug - Build Output Sample (first 50 lines)"
+        head -50 "$BUILD_OUTPUT" || true
+        echo "::endgroup::"
+        
+        echo "::group::Debug - Lines containing 'warning'"
+        grep -i "warning" "$BUILD_OUTPUT" | head -20 || echo "No lines containing 'warning' found"
+        echo "::endgroup::"
+        
+        echo "::group::Debug - Raw grep patterns test"
+        echo "Testing Pattern 1 (strict MSBuild):"
+        grep -E "^\s*[^:]*\([0-9]+,[0-9]+\):\s*warning\s+[A-Z]{2}[0-9]{4}:" "$BUILD_OUTPUT" | head -5 || echo "No matches for Pattern 1"
+        echo ""
+        echo "Testing Pattern 2 (broader):"
+        grep -iE "warning\s+[A-Z]{2}[0-9]{4}" "$BUILD_OUTPUT" | head -5 || echo "No matches for Pattern 2"
+        echo ""
+        echo "Testing Pattern 3 (broadest):"
+        grep -iE "warning.*[A-Z]{2}[0-9]{4}" "$BUILD_OUTPUT" | head -5 || echo "No matches for Pattern 3"
+        echo ""
+        echo "File size and line count:"
+        wc -l "$BUILD_OUTPUT" || echo "Could not count lines"
+        echo "::endgroup::"
+        
         # Process warnings using associative array for deduplication
-        # Use specific pattern to match MSBuild warning format: file(line,col): warning CODE: message
-        # Exclude compiler command lines and GitHub Actions annotations
+        # Use multiple patterns to catch different warning formats
         declare -A warnings_map
+        
+        # Pattern 1: Standard MSBuild format: file(line,col): warning CODE: message
         while IFS=':' read -r full_line rest; do
           if [[ -n "$full_line" && -n "$rest" ]]; then
             # Extract the meaningful part as key: everything after /home/runner/work/ up to the first :
@@ -127,7 +151,50 @@ runs:
                  grep -v "/errorreport:" | \
                  grep -v "::warning::" || true)
         
+        # Pattern 2: Broader warning pattern (fallback)
+        while IFS=':' read -r full_line rest; do
+          if [[ -n "$full_line" && -n "$rest" ]]; then
+            # Create a unique key from the warning
+            key=$(echo "$full_line" | sed 's/^[0-9]*>//' | xargs)
+            if [[ -n "$key" && -z "${warnings_map[$key]}" ]]; then
+              rest=$(echo "$rest" | xargs)
+              warnings_map["$key"]="$rest"
+            fi
+          fi
+        done < <(grep -iE "warning\s+[A-Z]{2}[0-9]{4}" "$BUILD_OUTPUT" | \
+                 grep -v "/usr/share/dotnet/dotnet exec" | \
+                 grep -v "/errorreport:" | \
+                 grep -v "::warning::" || true)
+        
+        # Pattern 3: Even broader - any line with "warning" and a code
+        while IFS= read -r line; do
+          if [[ -n "$line" ]]; then
+            # Extract a reasonable key from the line
+            key=$(echo "$line" | sed -E 's/^[0-9]*>//; s/.*\/([^\/]+\([0-9]+,[0-9]+\)).*/\1/' | xargs)
+            if [[ -n "$key" && -z "${warnings_map[$key]}" ]]; then
+              warnings_map["$key"]="$line"
+            fi
+          fi
+        done < <(grep -iE "warning.*[A-Z]{2}[0-9]{4}" "$BUILD_OUTPUT" | \
+                 grep -v "/usr/share/dotnet/dotnet exec" | \
+                 grep -v "/errorreport:" | \
+                 grep -v "::warning::" | \
+                 head -50 || true)
+        
         WARNING_COUNT=${#warnings_map[@]}
+        
+        # Debug: Show what warnings were found
+        echo "::group::Debug - Warnings Found ($WARNING_COUNT)"
+        if [[ $WARNING_COUNT -gt 0 ]]; then
+          for key in "${!warnings_map[@]}"; do
+            echo "Key: $key"
+            echo "Value: ${warnings_map[$key]}"
+            echo "---"
+          done
+        else
+          echo "No warnings found with any pattern"
+        fi
+        echo "::endgroup::"
         
         # Determine build success
         BUILD_SUCCESS=true
