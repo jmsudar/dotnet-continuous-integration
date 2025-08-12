@@ -181,6 +181,28 @@ runs:
                  grep -v "::warning::" | \
                  head -50 || true)
         
+        # Pattern 4: Look for CS0219 specifically (unused variable warning)
+        while IFS= read -r line; do
+          if [[ -n "$line" ]]; then
+            # Extract a reasonable key from the line
+            key=$(echo "$line" | sed -E 's/^[0-9]*>//; s/.*\/([^\/]+\([0-9]+,[0-9]+\)).*/\1/' | xargs)
+            if [[ -n "$key" && -z "${warnings_map[$key]}" ]]; then
+              warnings_map["$key"]="$line"
+            fi
+          fi
+        done < <(grep -iE "CS0219" "$BUILD_OUTPUT" | head -10 || true)
+        
+        # Pattern 5: Look for any suppressed warnings or warning-related output
+        while IFS= read -r line; do
+          if [[ -n "$line" ]]; then
+            # Use the full line as key for suppressed warnings
+            key=$(echo "$line" | xargs)
+            if [[ -n "$key" && -z "${warnings_map[$key]}" ]]; then
+              warnings_map["$key"]="$line"
+            fi
+          fi
+        done < <(grep -iE "(nowarn|suppress.*warning)" "$BUILD_OUTPUT" | head -5 || true)
+        
         WARNING_COUNT=${#warnings_map[@]}
         
         # Debug: Show what warnings were found
@@ -193,6 +215,10 @@ runs:
           done
         else
           echo "No warnings found with any pattern"
+          echo "Checking if CS0219 appears anywhere in output:"
+          grep -i "CS0219" "$BUILD_OUTPUT" || echo "CS0219 not found"
+          echo "Checking warning suppression:"
+          grep -i "nowarn" "$BUILD_OUTPUT" || echo "No nowarn found"
         fi
         echo "::endgroup::"
         
