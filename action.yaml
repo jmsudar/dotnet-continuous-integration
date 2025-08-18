@@ -107,56 +107,34 @@ runs:
         
         
         # Process warnings using associative array for deduplication
-        # Focus on actual MSBuild warning messages, not compiler command lines
+        # Use similar approach to errors but for warnings
         declare -A warnings_map
-        
-        # Enhanced filtering function to exclude compiler commands and noise
-        filter_compiler_noise() {
-          grep -v "/usr/share/dotnet/dotnet exec" | \
-          grep -v "/usr/share/dotnet/sdk/" | \
-          grep -v "Roslyn/bincore/csc.dll" | \
-          grep -v "/errorreport:" | \
-          grep -v "/nowarn:" | \
-          grep -v "/reference:" | \
-          grep -v "/define:" | \
-          grep -v "/analyzer:" | \
-          grep -v "::warning::" | \
-          grep -v "^[[:space:]]*$"
-        }
-        
-        # Pattern 1: Standard MSBuild format: file(line,col): warning CODE: message
-        # This is the most reliable pattern for actual warnings
-        while IFS= read -r line; do
-          if [[ -n "$line" ]]; then
-            # Extract file and location for the key
-            if [[ "$line" =~ ([^/]+\([0-9]+,[0-9]+\)):[[:space:]]*warning[[:space:]]+([A-Z]{2}[0-9]{4}):[[:space:]]*(.+) ]]; then
-              file_location="${BASH_REMATCH[1]}"
-              warning_code="${BASH_REMATCH[2]}"
-              warning_message="${BASH_REMATCH[3]}"
-              key="$file_location"
-              warnings_map["$key"]="warning $warning_code: $warning_message"
+        while IFS=':' read -r full_line rest; do
+          if [[ -n "$full_line" && -n "$rest" ]]; then
+            # Skip compiler command lines that contain warning-related text
+            if [[ "$full_line" =~ /usr/share/dotnet/dotnet[[:space:]]exec ]] || \
+               [[ "$full_line" =~ Roslyn/bincore/csc\.dll ]] || \
+               [[ "$rest" =~ /nowarn: ]] || \
+               [[ "$rest" =~ /reference: ]] || \
+               [[ "$rest" =~ /define: ]]; then
+              continue
             fi
+            
+            # Extract the meaningful part as key: everything after /home/runner/work/ up to the first :
+            # This handles cases like "3>/home/runner/work/..." by extracting just the file path and location
+            if [[ "$full_line" =~ /home/runner/work/([^:]+) ]]; then
+              key="${BASH_REMATCH[1]}"
+            else
+              # Fallback: clean up the full line and use as key
+              key=$(echo "$full_line" | sed 's/^[0-9]*>//' | xargs)
+            fi
+            rest=$(echo "$rest" | xargs)
+            warnings_map["$key"]="$rest"
           fi
-        done < <(grep -E "\([0-9]+,[0-9]+\):[[:space:]]*warning[[:space:]]+[A-Z]{2}[0-9]{4}:" "$BUILD_OUTPUT" | filter_compiler_noise || true)
-        
-        # Pattern 2: Alternative format - look for warnings in project files or other contexts
-        # Only if we haven't found warnings with Pattern 1
-        if [[ ${#warnings_map[@]} -eq 0 ]]; then
-          while IFS= read -r line; do
-            if [[ -n "$line" ]]; then
-              # Look for warning code and extract meaningful parts
-              if [[ "$line" =~ warning[[:space:]]+([A-Z]{2}[0-9]{4}):[[:space:]]*(.+) ]]; then
-                warning_code="${BASH_REMATCH[1]}"
-                warning_message="${BASH_REMATCH[2]}"
-                # Use warning code as key to avoid duplicates
-                key="$warning_code"
-                if [[ -z "${warnings_map[$key]}" ]]; then
-                  warnings_map["$key"]="warning $warning_code: $warning_message"
-                fi
-              fi
-            fi
-          done < <(grep -iE "warning[[:space:]]+[A-Z]{2}[0-9]{4}:" "$BUILD_OUTPUT" | filter_compiler_noise | head -20 || true)
-        fi
+        done < <(grep -E "^\s*[^:]*\([0-9]+,[0-9]+\):\s*warning\s+[A-Z]{2}[0-9]{4}:" "$BUILD_OUTPUT" | \
+                 grep -v "/usr/share/dotnet/dotnet exec" | \
+                 grep -v "/errorreport:" | \
+                 grep -v "::warning::" || true)
         
         WARNING_COUNT=${#warnings_map[@]}
         
