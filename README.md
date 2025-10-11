@@ -4,16 +4,39 @@ This GitHub Action is designed to provide a simple and effective way to build an
 
 ## Features
 
-- .NET Version Flexibility: Uses any specified version of the .NET SDK.
-- Configurable Build and Test Commands: Allows for custom build configurations and test verbosity levels.
+- **🔨 Enhanced Error & Warning Reporting**: Reliable parsing of build output with clear visual indicators
+- **📊 Rich GitHub Actions Summary**: Detailed build and test results with collapsible sections and emoji status indicators
+- **🎯 GitHub Annotations**: Inline error and warning annotations with file/line information
+- **🧪 Comprehensive Test Analysis**: Parses console output for detailed test failure information
+- **🔧 .NET Version Flexibility**: Uses any specified version of the .NET SDK
+- **⚙️ Configurable Build and Test Commands**: Allows for custom build configurations and test verbosity levels
+- **🚀 Zero External Dependencies**: Pure bash implementation with no external tool requirements
+- **📝 Self-Contained Reporting**: All reporting happens in-memory without file management overhead
+
+### Visual Status Indicators
+
+The action provides at-a-glance status information using emojis:
+
+- 🟢 ✅ **SUCCESS** - No errors or warnings
+- 🟡 ⚠️ **SUCCESS WITH WARNINGS** - Build succeeded but has warnings
+- 🔴 ❌ **FAILED** - Build or tests failed
+
+### Reporting Features
+
+- **GitHub Actions Summary**: Rich markdown summary with metrics tables and collapsible error/warning details
+- **GitHub Annotations**: Inline file annotations for errors and warnings with precise line/column information
+- **Console Output**: Clear status messages with emoji indicators for quick visual assessment
+- **Environment Variables**: Exports build and test metrics for use in subsequent workflow steps
 
 ## Inputs
 
 | Input                      | Description                                          | Required | Default  |
 |----------------------------|------------------------------------------------------|----------|----------|
-| `dotnet-version`           | The .NET SDK version to use.                         | No       | `6.0`    |
+| `nuget-api-key` | The NuGet key set in your repo | Yes | `''` |
+|`dotnet-version`           | The .NET SDK version to use.                         | No       | `6.0`    |
 | `build-configuration`      | Configuration to use for building the project.       | No       | `Release`|
 | `test-verbosity`           | Set the verbosity of test results.                   | No       | `normal` |
+| `solution-path`            | Path to the solution file.                           | No       | `'.'`    |
 | `additional-build-arguments`| Any additional arguments to include with your build command | No | `''` |
 | `additional-test-arguments`| Any additional arguments to include with your test command | No | `''` |
 
@@ -35,6 +58,8 @@ jobs:
     steps:
       - name: Run .NET CI Action
         uses: jmsudar/dotnet-continuous-integration@main
+        with:
+          nuget-api-key: ${{ secrets.NUGET_API_KEY }}
 ```
 
 ### Customized Usage
@@ -54,9 +79,12 @@ jobs:
       - name: Run .NET CI Action
         uses: jmsudar/dotnet-continuous-integration@main
         with:
+          nuget-api-key: ${{ secrets.NUGET_API_KEY }}
           dotnet-version: '7.0'
           build-configuration: 'Debug'
           test-verbosity: 'detailed'
+          additional-build-arguments: '--warnaserror'
+          additional-test-arguments: '--filter "Category!=Integration"'
 ```
 
 If there are additionall CI steps you wish to run such as SonarQube coverage, simply add them as additional steps.

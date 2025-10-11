@@ -4,6 +4,10 @@ branding:
   icon: 'settings'
   color: 'green'
 inputs:
+  nuget-api-key:
+    description: 'NuGet API key for publishing packages'
+    required: true
+    default: ''
   dotnet-version:
     description: 'The .NET SDK version to use'
     required: false
@@ -16,9 +20,32 @@ inputs:
     description: 'Set the verbosity of test results'
     required: false
     default: 'normal'
+  solution-path:
+    description: 'Path to the solution file'
+    required: false
+    default: '.'
+  additional-build-arguments:
+    description: 'Extra arguments to pass to dotnet build'
+    required: false
+    default: ''
+  additional-test-arguments:
+    description: 'Extra arguments to pass to dotnet test'
+    required: false
+    default: ''
 runs:
   using: 'composite'
   steps:
+    # fast-fail if NUGET_API_KEY is not set, as CD will fail without it so the branch should not merge
+    - name: Check NUGET_API_KEY is set
+      env:
+        NUGET_API_KEY: ${{ inputs.nuget-api-key }}
+      shell: bash
+      run: |
+        if [[ -z "${NUGET_API_KEY}" ]]; then
+          echo "::error::Error: NUGET_API_KEY is not set. Please ensure it is configured as a secret in your repository."
+          exit 1
+        fi
+
     - name: Checkout Code
       uses: actions/checkout@v4
 
@@ -28,13 +55,311 @@ runs:
         dotnet-version: ${{ inputs.dotnet-version }}
 
     - name: Restore dependencies
-      run: dotnet restore
       shell: bash
+      env:
+        SOLUTION_PATH: ${{ inputs.solution-path }}
+      run: dotnet restore ${{ env.SOLUTION_PATH }}
 
-    - name: Build
-      run: dotnet build --no-restore --configuration ${{ inputs.build-configuration }}
+    - name: Build and Analyze
       shell: bash
+      env:
+        BUILD_CONFIGURATION: ${{ inputs.build-configuration }}
+        SOLUTION_PATH: ${{ inputs.solution-path }}
+        ADDITIONAL_BUILD_ARGUMENTS: ${{ inputs.additional-build-arguments }}
+      run: |
+        BUILD_OUTPUT=$(mktemp)
+        
+        echo "::group::Build Output"
+        
+        # Run build and capture all output
+        set +e
+        dotnet build ${SOLUTION_PATH} --no-restore --configuration ${BUILD_CONFIGURATION} ${ADDITIONAL_BUILD_ARGUMENTS} \
+          --verbosity normal 2>&1 | tee "$BUILD_OUTPUT"
+        BUILD_EXIT_CODE=$?
+        set -e
+        
+        echo "::endgroup::"
+        
+        # Dedupe errors and warnings using associative array
+        # error format: file(line,col): error CODE: message        
+        declare -A errors_map
+        while IFS=':' read -r full_line rest; do
+          if [[ -n "$full_line" && -n "$rest" ]]; then
+            if [[ "$full_line" =~ /home/runner/work/([^:]+) ]]; then
+              key="${BASH_REMATCH[1]}"
+            else
+              key=$(echo "$full_line" | sed 's/^[0-9]*>//' | xargs)
+            fi
+            rest=$(echo "$rest" | xargs)
+            errors_map["$key"]="$rest"
+          fi
+        done < <(grep -E "^\s*[^:]*\([0-9]+,[0-9]+\):\s*error\s+[A-Z]{2}[0-9]{4}:" "$BUILD_OUTPUT" | \
+                 grep -v "/usr/share/dotnet/dotnet exec" | \
+                 grep -v "/errorreport:" | \
+                 grep -v "::error::" || true)
+        
+        ERROR_COUNT=${#errors_map[@]}
+        
+        # warning format: file(line, col): warning CODE: message
+        declare -A warnings_map
+        while IFS=':' read -r full_line rest; do
+          if [[ -n "$full_line" && -n "$rest" ]]; then
+            if [[ "$full_line" =~ /home/runner/work/([^:]+) ]]; then
+              key="${BASH_REMATCH[1]}"
+            else
+              key=$(echo "$full_line" | sed 's/^[0-9]*>//' | xargs)
+            fi
+            rest=$(echo "$rest" | xargs)
+            warnings_map["$key"]="$rest"
+          fi
+        done < <(grep -E "^\s*[^:]*\([0-9]+,[0-9]+\):\s*warning\s+[A-Z]{2}[0-9]{4}:" "$BUILD_OUTPUT" | \
+                 grep -v "/usr/share/dotnet/dotnet exec" | \
+                 grep -v "/errorreport:" | \
+                 grep -v "::warning::" || true)
+        
+        WARNING_COUNT=${#warnings_map[@]}
+                
+        # Determine build success
+        BUILD_SUCCESS=true
+        if [[ $BUILD_EXIT_CODE -ne 0 ]] || [[ $ERROR_COUNT -gt 0 ]]; then
+          BUILD_SUCCESS=false
+        fi
+        
+        # Generate GitHub Actions Summary
+        echo "# 🔨 Build Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Build status with emoji indicators
+        if [[ $ERROR_COUNT -gt 0 ]]; then
+          echo "🔴 **Build Status:** ❌ FAILED" >> $GITHUB_STEP_SUMMARY
+        elif [[ $WARNING_COUNT -gt 0 ]]; then
+          echo "🟡 **Build Status:** ⚠️ SUCCESS WITH WARNINGS" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "🟢 **Build Status:** ✅ SUCCESS" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+        echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| 🔴 Errors | $ERROR_COUNT |" >> $GITHUB_STEP_SUMMARY
+        echo "| 🟡 Warnings | $WARNING_COUNT |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Add error details if any
+        if [[ $ERROR_COUNT -gt 0 ]]; then
+          echo "<details>" >> $GITHUB_STEP_SUMMARY
+          echo "<summary>🔴 Build Errors ($ERROR_COUNT)</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          for key in "${!errors_map[@]}"; do
+            echo "- **$key**: ${errors_map[$key]}" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Add warning details if any
+        if [[ $WARNING_COUNT -gt 0 ]]; then
+          echo "<details>" >> $GITHUB_STEP_SUMMARY
+          echo "<summary>🟡 Build Warnings ($WARNING_COUNT)</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          for key in "${!warnings_map[@]}"; do
+            echo "- **$key**: ${warnings_map[$key]}" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Create GitHub annotations for errors
+        for key in "${!errors_map[@]}"; do
+          echo "::error::$key: ${errors_map[$key]}"
+        done
+        
+        # Create GitHub annotations for warnings
+        for key in "${!warnings_map[@]}"; do
+          echo "::warning::$key: ${warnings_map[$key]}"
+        done
+        
+        # Output final status messages
+        if [[ $BUILD_SUCCESS == false ]]; then
+          if [[ $WARNING_COUNT -gt 0 ]]; then
+            echo "::error::❌ Build failed with $ERROR_COUNT error(s) and $WARNING_COUNT warning(s)"
+          else
+            echo "::error::❌ Build failed with $ERROR_COUNT error(s)"
+          fi
+        else
+          if [[ $WARNING_COUNT -gt 0 ]]; then
+            echo "::warning::⚠️ Build succeeded with $WARNING_COUNT warning(s)"
+          else
+            echo "::notice::✅ Build succeeded with no errors or warnings"
+          fi
+        fi
+        
+        # Export variables for later steps
+        echo "BUILD_SUCCESS=$BUILD_SUCCESS" >> $GITHUB_ENV
+        echo "BUILD_ERROR_COUNT=$ERROR_COUNT" >> $GITHUB_ENV
+        echo "BUILD_WARNING_COUNT=$WARNING_COUNT" >> $GITHUB_ENV
+        
+        # Clean up temp file
+        rm -f "$BUILD_OUTPUT"
+        
+        # Exit with error if build failed
+        if [[ $BUILD_SUCCESS == false ]]; then
+          exit 1
+        fi
 
-    - name: Run tests
-      run: dotnet test --no-build --configuration ${{ inputs.build-configuration }} --verbosity ${{ inputs.test-verbosity }}
+    - name: Run Tests and Analyze
       shell: bash
+      env:
+        BUILD_CONFIGURATION: ${{ inputs.build-configuration }}
+        SOLUTION_PATH: ${{ inputs.solution-path }}
+        TEST_VERBOSITY: ${{ inputs.test-verbosity }}
+        ADDITIONAL_TEST_ARGUMENTS: ${{ inputs.additional-test-arguments }}
+      run: |
+        # Capture test output to temp file
+        TEST_OUTPUT=$(mktemp)
+        
+        echo "::group::Test Output"
+        
+        # Run tests and capture all output
+        set +e
+        dotnet test ${SOLUTION_PATH} --no-build --configuration ${BUILD_CONFIGURATION} \
+          --verbosity ${TEST_VERBOSITY} ${ADDITIONAL_TEST_ARGUMENTS} \
+          --logger "console;verbosity=detailed" 2>&1 | tee "$TEST_OUTPUT"
+        TEST_EXIT_CODE=$?
+        set -e
+        
+        echo "::endgroup::"
+        
+        # Parse test results from console output using simple grep
+        PASSED=$(grep -oP 'Passed:\s*\K[0-9]+' "$TEST_OUTPUT" | tail -1 || echo "0")
+        FAILED=$(grep -oP 'Failed:\s*\K[0-9]+' "$TEST_OUTPUT" | tail -1 || echo "0")
+        SKIPPED=$(grep -oP 'Skipped:\s*\K[0-9]+' "$TEST_OUTPUT" | tail -1 || echo "0")
+        
+        # Alternative parsing patterns for different dotnet output formats
+        if [[ "$PASSED" == "0" && "$FAILED" == "0" && "$SKIPPED" == "0" ]]; then
+          # Try alternative patterns
+          PASSED=$(grep -oP 'Passed!\s*-\s*Failed:\s*0,\s*Passed:\s*\K[0-9]+' "$TEST_OUTPUT" || echo "0")
+          FAILED=$(grep -oP 'Failed!\s*-\s*Failed:\s*\K[0-9]+' "$TEST_OUTPUT" || echo "0")
+          
+          # Try yet another pattern for summary lines
+          if [[ "$PASSED" == "0" && "$FAILED" == "0" ]]; then
+            TOTAL_LINE=$(grep -E "Total tests:|Tests run:" "$TEST_OUTPUT" | tail -1 || echo "")
+            if [[ -n "$TOTAL_LINE" ]]; then
+              PASSED=$(echo "$TOTAL_LINE" | grep -oP 'Passed:\s*\K[0-9]+' || echo "0")
+              FAILED=$(echo "$TOTAL_LINE" | grep -oP 'Failed:\s*\K[0-9]+' || echo "0")
+              SKIPPED=$(echo "$TOTAL_LINE" | grep -oP 'Skipped:\s*\K[0-9]+' || echo "0")
+            fi
+          fi
+        fi
+        
+        TOTAL=$((PASSED + FAILED + SKIPPED))
+        
+        # Determine test success
+        TEST_SUCCESS=true
+        if [[ $TEST_EXIT_CODE -ne 0 ]] || [[ $FAILED -gt 0 ]]; then
+          TEST_SUCCESS=false
+        fi
+        
+        # Generate test summary
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "# 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Test status with emoji indicators
+        if [[ $TEST_SUCCESS == false ]]; then
+          echo "🔴 **Test Status:** ❌ FAILED" >> $GITHUB_STEP_SUMMARY
+        elif [[ $SKIPPED -gt 0 ]]; then
+          echo "🟡 **Test Status:** ⚠️ PASSED WITH SKIPPED TESTS" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "🟢 **Test Status:** ✅ ALL PASSED" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+        echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| 📊 Total Tests | $TOTAL |" >> $GITHUB_STEP_SUMMARY
+        echo "| ✅ Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
+        echo "| ❌ Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
+        echo "| ⏭️ Skipped | $SKIPPED |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Add failed test details if any (simple approach for now)
+        if [[ $FAILED -gt 0 ]]; then
+          echo "<details>" >> $GITHUB_STEP_SUMMARY
+          echo "<summary>❌ Failed Tests ($FAILED)</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          
+          # Extract failed test information using simple grep patterns
+          grep -E "(FAIL|Failed|✗)" "$TEST_OUTPUT" | grep -v "Failed:" | head -10 >> $GITHUB_STEP_SUMMARY || \
+          echo "Failed test details not available in this format" >> $GITHUB_STEP_SUMMARY
+          
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Create GitHub annotations for failed tests
+          grep -E "(FAIL|Failed|✗)" "$TEST_OUTPUT" | grep -v "Failed:" | head -10 | while IFS= read -r line; do
+            if [[ -n "$line" ]]; then
+              echo "::error::❌ Failed Test: $line"
+            fi
+          done
+        fi
+        
+        # Output final test status messages
+        if [[ $TEST_SUCCESS == false ]]; then
+          echo "::error::❌ $FAILED test(s) failed out of $TOTAL total tests"
+        else
+          if [[ $SKIPPED -gt 0 ]]; then
+            echo "::warning::⚠️ All tests passed but $SKIPPED test(s) were skipped"
+          elif [[ $TOTAL -gt 0 ]]; then
+            echo "::notice::✅ All $PASSED test(s) passed"
+          else
+            echo "::warning::⚠️ No tests found to execute"
+          fi
+        fi
+        
+        # Export variables for later steps
+        echo "TEST_SUCCESS=$TEST_SUCCESS" >> $GITHUB_ENV
+        echo "TEST_TOTAL=$TOTAL" >> $GITHUB_ENV
+        echo "TEST_PASSED=$PASSED" >> $GITHUB_ENV
+        echo "TEST_FAILED=$FAILED" >> $GITHUB_ENV
+        echo "TEST_SKIPPED=$SKIPPED" >> $GITHUB_ENV
+        
+        # Clean up temp file
+        rm -f "$TEST_OUTPUT"
+        
+        # Exit with error if tests failed
+        if [[ $TEST_SUCCESS == false ]]; then
+          exit 1
+        fi
+
+    - name: Final Summary
+      if: always()
+      shell: bash
+      run: |
+        # Generate final summary section
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "---" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Determine overall status
+        BUILD_SUCCESS="${BUILD_SUCCESS:-false}"
+        TEST_SUCCESS="${TEST_SUCCESS:-false}"
+        
+        if [[ "$BUILD_SUCCESS" == "true" && "$TEST_SUCCESS" == "true" ]]; then
+          echo "🎉 **Overall Status: SUCCESS** ✅" >> $GITHUB_STEP_SUMMARY
+          echo "::notice::🎉 CI pipeline completed successfully!"
+        else
+          echo "💥 **Overall Status: FAILED** ❌" >> $GITHUB_STEP_SUMMARY
+          echo "::error::💥 CI pipeline failed - check the details above"
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "_Generated by .NET Continuous Integration Action_" >> $GITHUB_STEP_SUMMARY
